@@ -1,8 +1,8 @@
 [package]
-name = "bolt-bevy"
+name = "bolt-examples"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rolt = "0.3"
+bolt-bevy = {path = "../bolt-bevy"}
 bevy = "0.19"
