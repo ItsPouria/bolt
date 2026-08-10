@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 rolt = "0.3"
 bevy = "0.19"
+joltc-sys = "0.3.1"
