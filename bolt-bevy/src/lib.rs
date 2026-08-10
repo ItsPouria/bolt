@@ -1,3 +1,5 @@
+//! Bevy integration for the Jolt Physics engine.
+
 use bevy::prelude::*;
 use joltc_sys::*;
 use rolt::{
@@ -5,6 +7,7 @@ use rolt::{
     ObjectVsBroadPhaseLayerFilter, PhysicsSystem,
 };
 
+/// A simple broad phase layer implementation that puts all objects in a single layer.
 pub struct SimpleBroadPhaseLayer;
 impl BroadPhaseLayerInterface for SimpleBroadPhaseLayer {
     fn get_num_broad_phase_layers(&self) -> u32 {
@@ -15,6 +18,7 @@ impl BroadPhaseLayerInterface for SimpleBroadPhaseLayer {
     }
 }
 
+/// A default filter that allows all objects to collide with the broad phase.
 pub struct SimpleObjectVsBroadPhaseLayerFilter;
 impl ObjectVsBroadPhaseLayerFilter for SimpleObjectVsBroadPhaseLayerFilter {
     fn should_collide(&self, _layer1: ObjectLayer, _layer2: BroadPhaseLayer) -> bool {
@@ -22,6 +26,7 @@ impl ObjectVsBroadPhaseLayerFilter for SimpleObjectVsBroadPhaseLayerFilter {
     }
 }
 
+/// A default filter that allows all objects to collide with each other.
 pub struct SimpleObjectLayerPairFilter;
 impl ObjectLayerPairFilter for SimpleObjectLayerPairFilter {
     fn should_collide(&self, _layer1: ObjectLayer, _layer2: ObjectLayer) -> bool {
@@ -29,47 +34,47 @@ impl ObjectLayerPairFilter for SimpleObjectLayerPairFilter {
     }
 }
 
+/// The core Bevy resource representing the Jolt physics world.
+///
+/// This struct owns the Jolt `PhysicsSystem` as well as the temporary allocator
+/// and job system required to step the simulation.
 #[derive(Resource)]
 pub struct PhysicsWorld {
     pub physics_system: PhysicsSystem,
     pub temp_allocator: *mut JPC_TempAllocatorImpl,
     pub job_system: *mut JPC_JobSystemThreadPool,
 }
+
 impl PhysicsWorld {
+    /// Creates a new physics world with default settings.
     pub fn new() -> Self {
-        println!("1. Initializing Jolt Core");
+        // Initialize the Jolt core. This is required before any Jolt objects can be created.
         unsafe {
             JPC_RegisterDefaultAllocator();
             JPC_FactoryInit();
             JPC_RegisterTypes();
         }
 
-        println!("2. Creating PhysicsSystem");
         let mut physics_system = PhysicsSystem::new();
-
-        println!("3. Calling PhysicsSystem.init");
         physics_system.init(
-            10240,
-            0,
-            65536,
-            10240,
+            10240, // max_bodies
+            0,     // num_body_mutexes (0 = default)
+            65536, // max_body_pairs
+            10240, // max_contact_constraints
             SimpleBroadPhaseLayer,
             SimpleObjectVsBroadPhaseLayerFilter,
             SimpleObjectLayerPairFilter,
         );
 
-        println!("4. Creating TempAllocator");
-        let temp_allocator = unsafe { JPC_TempAllocatorImpl_new(10 * 1024 * 1024) };
-
-        println!("5. Creating JobSystem");
+        let temp_allocator = unsafe { JPC_TempAllocatorImpl_new(10 * 1024 * 1024) }; // 10 MB
         let job_system = unsafe {
             JPC_JobSystemThreadPool_new3(
                 JPC_MAX_PHYSICS_JOBS as u32,
                 JPC_MAX_PHYSICS_BARRIERS as u32,
-                2,
+                2, // num_threads
             )
         };
-        // 4. Return the struct
+
         Self {
             physics_system,
             temp_allocator,
@@ -78,10 +83,25 @@ impl PhysicsWorld {
     }
 }
 
-// We tell Rust that it is safe to send this struct and share references to it
-// across threads. This is safe because Jolt's PhysicsSystem is designed for
-// multi-threaded access, and Bevy's ResMut ensures we don't mutate it from
-// multiple threads at the exact same time.
+impl Default for PhysicsWorld {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for PhysicsWorld {
+    fn drop(&mut self) {
+        // Clean up C++ allocated memory to prevent leaks
+        unsafe {
+            JPC_JobSystemThreadPool_delete(self.job_system);
+            JPC_TempAllocatorImpl_delete(self.temp_allocator);
+        }
+    }
+}
+
+// SAFETY: The Jolt `PhysicsSystem` is designed for multi-threaded access.
+// Bevy's `ResMut` ensures we do not mutate the physics world from multiple
+// systems simultaneously, making it safe to implement `Send` and `Sync`.
 unsafe impl Send for PhysicsWorld {}
 unsafe impl Sync for PhysicsWorld {}
 
@@ -91,14 +111,11 @@ mod tests {
 
     #[test]
     fn hello_world_physics() {
-        // 1. Create the physics world
         let world = PhysicsWorld::new();
 
-        // 2. Step the simulation forward by one frame
         let delta_time = 1.0 / 60.0; // 60 FPS
         let collision_steps = 1;
 
-        println!("6. Stepping simulation");
         unsafe {
             world.physics_system.update(
                 delta_time,
@@ -107,6 +124,5 @@ mod tests {
                 world.job_system,
             );
         }
-        println!("7. Done!");
     }
 }
