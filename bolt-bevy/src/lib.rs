@@ -2,8 +2,9 @@
 
 use bevy::prelude::*;
 use joltc_sys::{
-    JPC_JobSystemThreadPool, JPC_JobSystemThreadPool_delete, JPC_JobSystemThreadPool_new3,
-    JPC_MAX_PHYSICS_BARRIERS, JPC_MAX_PHYSICS_JOBS, JPC_TempAllocatorImpl,
+    JPC_FactoryInit, JPC_JobSystemThreadPool, JPC_JobSystemThreadPool_delete,
+    JPC_JobSystemThreadPool_new3, JPC_MAX_PHYSICS_BARRIERS, JPC_MAX_PHYSICS_JOBS,
+    JPC_RegisterDefaultAllocator, JPC_RegisterTypes, JPC_TempAllocatorImpl,
     JPC_TempAllocatorImpl_delete, JPC_TempAllocatorImpl_new,
 };
 use rolt::{
