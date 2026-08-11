@@ -6,6 +6,7 @@ use rolt::{
     BroadPhaseLayer, BroadPhaseLayerInterface, ObjectLayer, ObjectLayerPairFilter,
     ObjectVsBroadPhaseLayerFilter, PhysicsSystem,
 };
+use std::ptr::NonNull;
 
 /// A simple broad phase layer implementation that puts all objects in a single layer.
 pub struct SimpleBroadPhaseLayer;
@@ -41,8 +42,8 @@ impl ObjectLayerPairFilter for SimpleObjectLayerPairFilter {
 #[derive(Resource)]
 pub struct PhysicsWorld {
     pub physics_system: PhysicsSystem,
-    pub temp_allocator: *mut JPC_TempAllocatorImpl,
-    pub job_system: *mut JPC_JobSystemThreadPool,
+    pub temp_allocator: NonNull<JPC_TempAllocatorImpl>,
+    pub job_system: NonNull<JPC_JobSystemThreadPool>,
 }
 
 impl PhysicsWorld {
@@ -66,14 +67,18 @@ impl PhysicsWorld {
             SimpleObjectLayerPairFilter,
         );
 
-        let temp_allocator = unsafe { JPC_TempAllocatorImpl_new(10 * 1024 * 1024) }; // 10 MB
-        let job_system = unsafe {
+        let temp_allocator_ptr = unsafe { JPC_TempAllocatorImpl_new(10 * 1024 * 1024) }; // 10 MB
+        let temp_allocator = NonNull::new(temp_allocator_ptr)
+            .expect("Failed to allocate Jolt TempAllocator: Out of memory");
+        let job_system_ptr = unsafe {
             JPC_JobSystemThreadPool_new3(
                 JPC_MAX_PHYSICS_JOBS as u32,
                 JPC_MAX_PHYSICS_BARRIERS as u32,
                 2, // num_threads
             )
         };
+        let job_system =
+            NonNull::new(job_system_ptr).expect("Failed to allocate Jolt JobSystem: Out of memory");
 
         Self {
             physics_system,
@@ -93,8 +98,8 @@ impl Drop for PhysicsWorld {
     fn drop(&mut self) {
         // Clean up C++ allocated memory to prevent leaks
         unsafe {
-            JPC_JobSystemThreadPool_delete(self.job_system);
-            JPC_TempAllocatorImpl_delete(self.temp_allocator);
+            JPC_JobSystemThreadPool_delete(self.job_system.as_ptr());
+            JPC_TempAllocatorImpl_delete(self.temp_allocator.as_ptr());
         }
     }
 }
@@ -120,8 +125,8 @@ mod tests {
             world.physics_system.update(
                 delta_time,
                 collision_steps,
-                world.temp_allocator,
-                world.job_system,
+                world.temp_allocator.as_ptr(),
+                world.job_system.as_ptr(),
             );
         }
     }
