@@ -12,15 +12,8 @@ impl Plugin for BoltPlugin {
     }
 }
 
-pub fn step_physics(world: ResMut<PhysicsWorld>, time: Res<Time>) {
+fn step_physics(mut world: ResMut<PhysicsWorld>, time: Res<Time>) {
     let delta_time = time.delta_secs();
     let collision_steps = 1;
-    unsafe {
-        world.physics_system.update(
-            delta_time,
-            collision_steps,
-            world.temp_allocator.as_ptr(),
-            world.job_system.as_ptr(),
-        );
-    }
+    world.step(delta_time, collision_steps);
 }

@@ -1,4 +1,5 @@
 use crate::config::PhysicsConfig;
+use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 
 use bevy::ecs::resource::Resource;
@@ -20,9 +21,9 @@ use crate::layers::{
 /// and job system required to step the simulation.
 #[derive(Resource)]
 pub struct PhysicsWorld {
-    pub physics_system: PhysicsSystem,
-    pub temp_allocator: NonNull<JPC_TempAllocatorImpl>,
-    pub job_system: NonNull<JPC_JobSystemThreadPool>,
+    physics_system: ManuallyDrop<PhysicsSystem>,
+    temp_allocator: NonNull<JPC_TempAllocatorImpl>,
+    job_system: NonNull<JPC_JobSystemThreadPool>,
 }
 
 impl PhysicsWorld {
@@ -60,9 +61,24 @@ impl PhysicsWorld {
             NonNull::new(job_system_ptr).expect("Failed to allocate Jolt JobSystem: Out of memory");
 
         Self {
-            physics_system,
+            physics_system: ManuallyDrop::new(physics_system),
             temp_allocator,
             job_system,
+        }
+    }
+
+    pub fn physics_system(&self) -> &PhysicsSystem {
+        &self.physics_system
+    }
+
+    pub fn step(&mut self, delta_time: f32, collision_steps: i32) {
+        unsafe {
+            self.physics_system.update(
+                delta_time,
+                collision_steps,
+                self.temp_allocator.as_ptr(),
+                self.job_system.as_ptr(),
+            );
         }
     }
 }
@@ -75,7 +91,10 @@ impl Default for PhysicsWorld {
 
 impl Drop for PhysicsWorld {
     fn drop(&mut self) {
-        // Clean up C++ allocated memory to prevent leaks
+        unsafe {
+            ManuallyDrop::drop(&mut self.physics_system);
+        }
+
         unsafe {
             JPC_JobSystemThreadPool_delete(self.job_system.as_ptr());
             JPC_TempAllocatorImpl_delete(self.temp_allocator.as_ptr());
