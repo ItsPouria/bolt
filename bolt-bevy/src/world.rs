@@ -1,3 +1,4 @@
+use crate::config::PhysicsConfig;
 use std::ptr::NonNull;
 
 use bevy::ecs::resource::Resource;
@@ -26,7 +27,7 @@ pub struct PhysicsWorld {
 
 impl PhysicsWorld {
     /// Creates a new physics world with default settings.
-    pub fn new() -> Self {
+    pub fn new(config: PhysicsConfig) -> Self {
         // Initialize the Jolt core. This is required before any Jolt objects can be created.
         unsafe {
             JPC_RegisterDefaultAllocator();
@@ -36,10 +37,10 @@ impl PhysicsWorld {
 
         let mut physics_system = PhysicsSystem::new();
         physics_system.init(
-            10240, // max_bodies
-            0,     // num_body_mutexes (0 = default)
-            65536, // max_body_pairs
-            10240, // max_contact_constraints
+            config.max_bodies,
+            0, // num_body_mutexes (0 = default) calculated automatically by Jolt
+            config.max_body_pairs,
+            config.max_contact_constraints,
             SimpleBroadPhaseLayer,
             SimpleObjectVsBroadPhaseLayerFilter,
             SimpleObjectLayerPairFilter,
@@ -52,7 +53,7 @@ impl PhysicsWorld {
             JPC_JobSystemThreadPool_new3(
                 JPC_MAX_PHYSICS_JOBS as u32,
                 JPC_MAX_PHYSICS_BARRIERS as u32,
-                2, // num_threads
+                config.num_threads, // num_threads
             )
         };
         let job_system =
@@ -68,7 +69,7 @@ impl PhysicsWorld {
 
 impl Default for PhysicsWorld {
     fn default() -> Self {
-        Self::new()
+        Self::new(PhysicsConfig::default())
     }
 }
 
