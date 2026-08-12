@@ -2,7 +2,6 @@
 pub mod layers;
 pub mod prelude;
 pub mod world;
-// Re-export rolt and joltc-sys so users don't have to add them as dependencies
 pub use joltc_sys;
 pub use rolt;
 
