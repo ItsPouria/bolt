@@ -14,18 +14,11 @@ mod tests {
 
     #[test]
     fn hello_world_physics() {
-        let world = PhysicsWorld::new(PhysicsConfig::default());
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
 
         let delta_time = 1.0 / 60.0; // 60 FPS
         let collision_steps = 1;
 
-        unsafe {
-            world.physics_system.update(
-                delta_time,
-                collision_steps,
-                world.temp_allocator.as_ptr(),
-                world.job_system.as_ptr(),
-            );
-        }
+        world.step(delta_time, collision_steps);
     }
 }
