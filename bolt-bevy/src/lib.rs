@@ -4,6 +4,7 @@ pub mod prelude;
 pub mod world;
 pub use joltc_sys;
 pub use rolt;
+pub mod config;
 
 #[cfg(test)]
 mod tests {
