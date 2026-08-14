@@ -8,7 +8,7 @@ pub struct PhysicsConfig {
     pub max_contact_constraints: u32, //The maximum number of contact poits Jolt will try to solve in a
     //single frame.
     pub num_threads: i32, //How many background threads Jolt's JobSystem should use.
-    gravity: bevy::math::Vec3,
+    pub gravity: bevy::math::Vec3,
 }
 
 impl Default for PhysicsConfig {

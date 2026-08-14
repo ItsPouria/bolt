@@ -3,11 +3,12 @@ use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 
 use bevy::ecs::resource::Resource;
+use bevy::math::Vec3;
 use joltc_sys::{
     JPC_FactoryInit, JPC_JobSystemThreadPool, JPC_JobSystemThreadPool_delete,
     JPC_JobSystemThreadPool_new3, JPC_MAX_PHYSICS_BARRIERS, JPC_MAX_PHYSICS_JOBS,
-    JPC_RegisterDefaultAllocator, JPC_RegisterTypes, JPC_TempAllocatorImpl,
-    JPC_TempAllocatorImpl_delete, JPC_TempAllocatorImpl_new,
+    JPC_PhysicsSystem_SetGravity, JPC_RegisterDefaultAllocator, JPC_RegisterTypes,
+    JPC_TempAllocatorImpl, JPC_TempAllocatorImpl_delete, JPC_TempAllocatorImpl_new, JPC_Vec3,
 };
 use rolt::PhysicsSystem;
 
@@ -37,6 +38,7 @@ impl PhysicsWorld {
         }
 
         let mut physics_system = PhysicsSystem::new();
+
         physics_system.init(
             config.max_bodies,
             0, // num_body_mutexes (0 = default) calculated automatically by Jolt
@@ -79,6 +81,19 @@ impl PhysicsWorld {
                 self.temp_allocator.as_ptr(),
                 self.job_system.as_ptr(),
             );
+        }
+    }
+
+    pub fn set_gravity(&mut self, gravity: Vec3) {
+        unsafe {
+            let raw_physics_system = self.physics_system.raw();
+            let gravity_vec = JPC_Vec3 {
+                x: gravity.x,
+                y: gravity.y,
+                z: gravity.z,
+                _w: 0.0,
+            };
+            JPC_PhysicsSystem_SetGravity(raw_physics_system, gravity_vec);
         }
     }
 }

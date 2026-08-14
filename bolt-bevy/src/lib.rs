@@ -5,6 +5,7 @@ pub mod world;
 pub use joltc_sys;
 pub use rolt;
 pub mod config;
+pub mod gravity;
 pub mod plugin;
 
 #[cfg(test)]
