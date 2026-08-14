@@ -1,4 +1,4 @@
-use bevy::ecs::resource::Resource;
+use bevy::prelude::*;
 
 #[derive(Resource, Debug, Clone)]
 pub struct PhysicsConfig {
@@ -8,6 +8,7 @@ pub struct PhysicsConfig {
     pub max_contact_constraints: u32, //The maximum number of contact poits Jolt will try to solve in a
     //single frame.
     pub num_threads: i32, //How many background threads Jolt's JobSystem should use.
+    gravity: bevy::math::Vec3,
 }
 
 impl Default for PhysicsConfig {
@@ -17,6 +18,7 @@ impl Default for PhysicsConfig {
             max_body_pairs: 65536,
             max_contact_constraints: 10240,
             num_threads: 2,
+            gravity: Vec3::new(0.0, -9.81, 0.0),
         }
     }
 }
