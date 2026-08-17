@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rolt = { git = "https://github.com/SecondHalfGames/jolt-rust" }
+rolt = { git = "https://github.com/SecondHalfGames/jolt-rust", rev = "72ac0cb1" }
 bevy = "0.19"
-joltc-sys = { git = "https://github.com/SecondHalfGames/jolt-rust" }
+joltc-sys = { git = "https://github.com/SecondHalfGames/jolt-rust", rev = "72ac0cb1" }
