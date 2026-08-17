@@ -85,6 +85,8 @@ impl PhysicsWorld {
     }
 
     pub fn set_gravity(&mut self, gravity: Vec3) {
+        // SAFETY: `physics_system.raw()` returns a valid pointer to the initialized
+        // JPC_PhysicsSystem. The JPC_Vec3 struct is correctly initialized with padding.
         unsafe {
             let raw_physics_system = self.physics_system.raw();
             let gravity_vec = JPC_Vec3 {
