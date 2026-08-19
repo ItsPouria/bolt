@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::gravity::{Gravity, apply_gravity};
+use crate::registry::PhysicsRegistry;
 use crate::world::PhysicsWorld;
 
 #[derive(Default, Debug)]
@@ -10,6 +11,7 @@ impl Plugin for BoltPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PhysicsWorld>();
         app.init_resource::<Gravity>(); // Initialize the gravity resource
+        app.init_resource::<PhysicsRegistry>();
 
         // Run gravity application BEFORE we step the physics world
         app.add_systems(Update, apply_gravity.before(step_physics));

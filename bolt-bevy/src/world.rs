@@ -1,14 +1,17 @@
+use crate::components::RigidBody;
 use crate::config::PhysicsConfig;
-use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
+use std::{mem::ManuallyDrop, ptr};
 
 use bevy::ecs::resource::Resource;
 use bevy::math::Vec3;
+use bevy::transform::components::Transform;
 use joltc_sys::{
-    JPC_FactoryInit, JPC_JobSystemThreadPool, JPC_JobSystemThreadPool_delete,
-    JPC_JobSystemThreadPool_new3, JPC_MAX_PHYSICS_BARRIERS, JPC_MAX_PHYSICS_JOBS,
-    JPC_PhysicsSystem_SetGravity, JPC_RegisterDefaultAllocator, JPC_RegisterTypes,
-    JPC_TempAllocatorImpl, JPC_TempAllocatorImpl_delete, JPC_TempAllocatorImpl_new, JPC_Vec3,
+    JPC_BoxShapeSettings, JPC_BoxShapeSettings_Create, JPC_FactoryInit, JPC_JobSystemThreadPool,
+    JPC_JobSystemThreadPool_delete, JPC_JobSystemThreadPool_new3, JPC_MAX_PHYSICS_BARRIERS,
+    JPC_MAX_PHYSICS_JOBS, JPC_PhysicsSystem_SetGravity, JPC_RegisterDefaultAllocator,
+    JPC_RegisterTypes, JPC_Shape, JPC_String, JPC_TempAllocatorImpl, JPC_TempAllocatorImpl_delete,
+    JPC_TempAllocatorImpl_new, JPC_Vec3,
 };
 use rolt::PhysicsSystem;
 
@@ -73,6 +76,58 @@ impl PhysicsWorld {
         &self.physics_system
     }
 
+    pub fn spawn_box(
+        &mut self,
+        half_extents: Vec3,
+        transform: &Transform,
+        rigidbody: &RigidBody,
+    ) -> Option<rolt::BodyId> {
+        let shape_ptr = create_box_shape(half_extents)?;
+
+        let motion_type = match rigidbody {
+            RigidBody::Dynamic => joltc_sys::JPC_MOTION_TYPE_DYNAMIC,
+            RigidBody::Static => joltc_sys::JPC_MOTION_TYPE_STATIC,
+        };
+
+        let position = joltc_sys::JPC_Vec3 {
+            x: transform.translation.x,
+            y: transform.translation.y,
+            z: transform.translation.z,
+            _w: 0.0,
+        };
+
+        let rotation = joltc_sys::JPC_Quat {
+            x: transform.rotation.x,
+            y: transform.rotation.y,
+            z: transform.rotation.z,
+            w: transform.rotation.w,
+        };
+
+        let object_layer = if motion_type == joltc_sys::JPC_MOTION_TYPE_STATIC { 0 } else { 1 };
+
+        let settings = joltc_sys::JPC_BodyCreationSettings {
+            Position: position,
+            Rotation: rotation,
+            MotionType: motion_type,
+            ObjectLayer: object_layer,
+            Shape: shape_ptr,
+            ..Default::default()
+        };
+
+        let body_id = unsafe {
+            let raw_physics_system = self.physics_system.raw();
+            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_physics_system);
+            
+            joltc_sys::JPC_BodyInterface_CreateAndAddBody(
+                body_interface,
+                &settings,
+                joltc_sys::JPC_ACTIVATION_ACTIVATE,
+            )
+        };
+
+        Some(rolt::BodyId::new(body_id))
+    }
+
     pub fn step(&mut self, delta_time: f32, collision_steps: i32) {
         unsafe {
             self.physics_system.update(
@@ -115,6 +170,29 @@ impl Drop for PhysicsWorld {
         unsafe {
             JPC_JobSystemThreadPool_delete(self.job_system.as_ptr());
             JPC_TempAllocatorImpl_delete(self.temp_allocator.as_ptr());
+        }
+    }
+}
+
+fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
+    let mut shape: *mut JPC_Shape = ptr::null_mut();
+    let mut err: *mut JPC_String = ptr::null_mut();
+
+    let settings = JPC_BoxShapeSettings {
+        HalfExtent: JPC_Vec3 {
+            x: half_extents.x,
+            y: half_extents.y,
+            z: half_extents.z,
+            _w: 0.0,
+        },
+        ..Default::default()
+    };
+
+    unsafe {
+        if JPC_BoxShapeSettings_Create(&settings, &mut shape, &mut err) {
+            Some(shape)
+        } else {
+            None
         }
     }
 }
