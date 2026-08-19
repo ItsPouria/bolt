@@ -14,4 +14,8 @@ impl PhysicsRegistry {
         self.entity_to_body.insert(entity, body_id);
         self.body_to_entity.insert(body_id, entity);
     }
+
+    pub fn get_body(&self, entity: Entity) -> Option<BodyId> {
+        self.entity_to_body.get(&entity).copied()
+    }
 }
