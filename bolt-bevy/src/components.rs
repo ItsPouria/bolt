@@ -13,4 +13,4 @@ pub enum Collider {
 }
 
 #[derive(Component, Debug, Clone, Copy)]
-pub struct JoltBodyId(pub BodyId)
+pub struct JoltBodyId(pub BodyId);

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::gravity::{Gravity, apply_gravity};
+use crate::systems::spawn_bodies;
 use crate::world::PhysicsWorld;
 
 #[derive(Default, Debug)]
@@ -12,7 +13,7 @@ impl Plugin for BoltPlugin {
         app.init_resource::<Gravity>(); // Initialize the gravity resource
 
         // Run gravity application BEFORE we step the physics world
-        app.add_systems(Update, apply_gravity.before(step_physics));
+        app.add_systems(Update, (spawn_bodies, apply_gravity, step_physics).chain());
         app.add_systems(Update, step_physics);
     }
 }
