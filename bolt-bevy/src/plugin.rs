@@ -13,9 +13,8 @@ impl Plugin for BoltPlugin {
         app.init_resource::<Gravity>(); // Initialize the gravity resource
         app.init_resource::<PhysicsRegistry>();
 
-        // Run gravity application BEFORE we step the physics world
-        app.add_systems(Update, (spawn_bodies, apply_gravity, step_physics).chain());
-        app.add_systems(Update, step_physics);
+        // Spawn bodies, apply gravity, and step the physics world in order
+        app.add_systems(Update, (crate::systems::spawn_physics_bodies, apply_gravity, step_physics).chain());
     }
 }
 
