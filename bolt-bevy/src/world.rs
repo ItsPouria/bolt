@@ -4,7 +4,7 @@ use std::ptr::NonNull;
 use std::{mem::ManuallyDrop, ptr};
 
 use bevy::ecs::resource::Resource;
-use bevy::math::Vec3;
+use bevy::math::{Quat, Vec3};
 use bevy::transform::components::Transform;
 use joltc_sys::{
     JPC_BoxShapeSettings, JPC_BoxShapeSettings_Create, JPC_FactoryInit, JPC_JobSystemThreadPool,
@@ -103,7 +103,11 @@ impl PhysicsWorld {
             w: transform.rotation.w,
         };
 
-        let object_layer = if motion_type == joltc_sys::JPC_MOTION_TYPE_STATIC { 0 } else { 1 };
+        let object_layer = if motion_type == joltc_sys::JPC_MOTION_TYPE_STATIC {
+            0
+        } else {
+            1
+        };
 
         let settings = joltc_sys::JPC_BodyCreationSettings {
             Position: position,
@@ -117,7 +121,7 @@ impl PhysicsWorld {
         let body_id = unsafe {
             let raw_physics_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_physics_system);
-            
+
             joltc_sys::JPC_BodyInterface_CreateAndAddBody(
                 body_interface,
                 &settings,
@@ -126,6 +130,21 @@ impl PhysicsWorld {
         };
 
         Some(rolt::BodyId::new(body_id))
+    }
+
+    pub fn get_transform(&self, body_id: rolt::BodyId) -> Option<(Vec3, Quat)> {
+        unsafe {
+            let raw_system = self.physics_system.raw();
+            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+
+            let pos = joltc_sys::JPC_BodyInterface_GetPosition(body_interface, body_id.raw());
+            let rot = joltc_sys::JPC_BodyInterface_GetRotation(body_interface, body_id.raw());
+
+            Some((
+                Vec3::new(pos.x as f32, pos.y as f32, pos.z as f32),
+                bevy::prelude::Quat::from_xyzw(rot.x, rot.y, rot.z, rot.w),
+            ))
+        }
     }
 
     pub fn step(&mut self, delta_time: f32, collision_steps: i32) {
