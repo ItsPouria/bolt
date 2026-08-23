@@ -19,3 +19,26 @@ impl PhysicsRegistry {
         self.entity_to_body.get(&entity).copied()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::prelude::Entity;
+
+    #[test]
+    fn test_registry_insert_and_get() {
+        let mut registry = PhysicsRegistry::default();
+
+        // 1. Create a fake Bevy Entity (Entity::from_raw(1))
+        let bevy_entity = Entity::from_raw_u32(1).unwrap();
+        // 2. Create a fake Jolt BodyId (BodyId::new(42))
+        let jolt_body_id = BodyId::new(42);
+        // 3. Register them!
+        registry.register(bevy_entity, jolt_body_id);
+        // 4. Assert that get_body returns Some(...)
+        assert_eq!(registry.get_body(bevy_entity), Some(jolt_body_id));
+        // 5. Assert that getting a fake Entity returns None
+        let fake_entity = Entity::from_raw_u32(99).unwrap();
+        assert_eq!(registry.get_body(fake_entity), None);
+    }
+}
