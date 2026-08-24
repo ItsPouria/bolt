@@ -29,3 +29,27 @@ impl ObjectLayerPairFilter for SimpleObjectLayerPairFilter {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_layers() {
+        // Test the broad phase
+        let broad_phase = SimpleBroadPhaseLayer;
+        assert_eq!(broad_phase.get_num_broad_phase_layers(), 1);
+        assert_eq!(
+            broad_phase.get_broad_phase_layer(ObjectLayer::new(0)).raw(),
+            0
+        );
+
+        // Test the object vs broad phase filter
+        let broad_filter = SimpleObjectVsBroadPhaseLayerFilter;
+        assert!(broad_filter.should_collide(ObjectLayer::new(0), BroadPhaseLayer::new(0)));
+
+        // Test the missing Object Layer Pair filter!
+        let pair_filter = SimpleObjectLayerPairFilter;
+        assert!(pair_filter.should_collide(ObjectLayer::new(0), ObjectLayer::new(1)));
+    }
+}
