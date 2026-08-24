@@ -43,3 +43,33 @@ pub fn sync_transforms(
         transform.rotation = new_rot;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::BoltPlugin;
+    use bevy::prelude::*;
+
+    #[test]
+    fn test_spawn_physics_bodies_failure() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(BoltPlugin::default());
+
+        let broken_entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Dynamic,
+                Collider::Box {
+                    half_extents: Vec3::splat(-1.0),
+                },
+            ))
+            .id();
+
+        app.update();
+
+        let registry = app.world().resource::<PhysicsRegistry>();
+        assert!(registry.get_body(broken_entity).is_none());
+    }
+}
