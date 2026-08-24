@@ -1,6 +1,7 @@
 use crate::components::RigidBody;
 use crate::config::PhysicsConfig;
 use std::ptr::NonNull;
+use std::sync::Once;
 use std::{mem::ManuallyDrop, ptr};
 
 use bevy::ecs::resource::Resource;
@@ -19,6 +20,8 @@ use crate::layers::{
     SimpleBroadPhaseLayer, SimpleObjectLayerPairFilter, SimpleObjectVsBroadPhaseLayerFilter,
 };
 
+static JOLT_INIT: Once = Once::new();
+
 /// The core Bevy resource representing the Jolt physics world.
 ///
 /// This struct owns the Jolt `PhysicsSystem` as well as the temporary allocator
@@ -34,11 +37,11 @@ impl PhysicsWorld {
     /// Creates a new physics world with default settings.
     pub fn new(config: PhysicsConfig) -> Self {
         // Initialize the Jolt core. This is required before any Jolt objects can be created.
-        unsafe {
+        JOLT_INIT.call_once(|| unsafe {
             JPC_RegisterDefaultAllocator();
             JPC_FactoryInit();
             JPC_RegisterTypes();
-        }
+        });
 
         let mut physics_system = PhysicsSystem::new();
 
@@ -221,3 +224,45 @@ fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
 // systems simultaneously, making it safe to implement `Send` and `Sync`.
 unsafe impl Send for PhysicsWorld {}
 unsafe impl Sync for PhysicsWorld {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::prelude::*;
+
+    #[test]
+    fn test_physics_system_getter() {
+        let physics_world = PhysicsWorld::default();
+        let system = physics_world.physics_system();
+
+        // Assert that the raw C++ pointer inside the system successfully initialized
+        assert!(
+            !system.raw().is_null(),
+            "The C++ Jolt PhysicsSystem pointer was null!"
+        );
+    }
+
+    #[test]
+    fn test_spawn_static_box() {
+        let mut physics_world = PhysicsWorld::default();
+        let transform = Transform::default();
+        let rigidbody = RigidBody::Static;
+        let box_size = Vec3::splat(1.0);
+
+        let result = physics_world.spawn_box(box_size, &transform, &rigidbody);
+
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_create_box_shape_failure() {
+        let mut physics_world = PhysicsWorld::default();
+        let transform = Transform::default();
+        let rigidbody = RigidBody::Static;
+        let box_size = Vec3::splat(-1.0);
+
+        let result = physics_world.spawn_box(box_size, &transform, &rigidbody);
+
+        assert!(result.is_none());
+    }
+}
