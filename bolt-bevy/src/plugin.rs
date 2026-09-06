@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::gravity::{Gravity, apply_gravity};
 use crate::registry::PhysicsRegistry;
+use crate::systems::sync_transforms;
 use crate::world::PhysicsWorld;
 
 #[derive(Default, Debug)]
@@ -14,12 +15,16 @@ impl Plugin for BoltPlugin {
         app.init_resource::<PhysicsRegistry>();
 
         // Spawn bodies, apply gravity, step the physics world, and finally sync the visuals
-        app.add_systems(Update, (
-            crate::systems::spawn_physics_bodies, 
-            apply_gravity, 
-            step_physics,
-            crate::systems::sync_transforms
-        ).chain());
+        app.add_systems(Update, crate::systems::spawn_physics_bodies);
+        app.add_systems(
+            FixedUpdate,
+            (
+                apply_gravity,
+                step_physics,
+                sync_transforms,
+            )
+                .chain(),
+        );
     }
 }
 

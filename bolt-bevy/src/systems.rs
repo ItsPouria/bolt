@@ -48,7 +48,6 @@ pub fn sync_transforms(
 mod tests {
     use super::*;
     use crate::plugin::BoltPlugin;
-    use bevy::prelude::*;
 
     #[test]
     fn test_spawn_physics_bodies_failure() {

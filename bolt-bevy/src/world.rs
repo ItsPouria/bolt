@@ -228,7 +228,6 @@ unsafe impl Sync for PhysicsWorld {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::prelude::*;
 
     #[test]
     fn test_physics_system_getter() {
