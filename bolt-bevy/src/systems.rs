@@ -44,6 +44,22 @@ pub fn sync_transforms(
     }
 }
 
+pub fn cleanup_despawned_physics_bodies(
+    mut removed: RemovedComponents<RigidBody>,
+    mut physics_world: ResMut<PhysicsWorld>,
+    mut registry: ResMut<PhysicsRegistry>,
+) {
+    for entity in removed.read() {
+        if let Some(body_id) = registry.remove_body(entity) {
+            physics_world.destroy_body(body_id);
+            info!(
+                "Successfully cleaned up Jolt body for despawned entity {:?}",
+                entity
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
