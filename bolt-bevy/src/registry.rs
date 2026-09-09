@@ -18,6 +18,15 @@ impl PhysicsRegistry {
     pub fn get_body(&self, entity: Entity) -> Option<BodyId> {
         self.entity_to_body.get(&entity).copied()
     }
+
+    pub fn remove_body(&mut self, entity: Entity) -> Option<BodyId> {
+        if let Some(body_id) = self.entity_to_body.remove(&entity) {
+            self.body_to_entity.remove(&body_id);
+            Some(body_id)
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
