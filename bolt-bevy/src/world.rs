@@ -175,6 +175,15 @@ impl PhysicsWorld {
             JPC_PhysicsSystem_SetGravity(raw_physics_system, gravity_vec);
         }
     }
+
+    pub fn destroy_body(&mut self, body_id: rolt::BodyId) {
+        unsafe {
+            let raw_physics_system = self.physics_system.raw();
+            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_physics_system);
+            joltc_sys::JPC_BodyInterface_RemoveBody(body_interface, body_id.raw());
+            joltc_sys::JPC_BodyInterface_DestroyBody(body_interface, body_id.raw());
+        }
+    }
 }
 
 impl Default for PhysicsWorld {
