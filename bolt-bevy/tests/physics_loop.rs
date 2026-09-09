@@ -21,7 +21,10 @@ fn test_gravity_pulls_dynamic_bodies() {
 
     app.update();
 
-    app.world_mut().insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs(1)));
+    app.world_mut()
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs(1),
+        ));
 
     app.update();
 
@@ -42,13 +45,16 @@ fn test_fixed_timestep_prevents_micro_updates() {
 
     // 1. Spawn a box exactly at Y = 10.0
     let start_y = 10.0;
-    let entity = app.world_mut().spawn((
-        Transform::from_xyz(0.0, start_y, 0.0),
-        RigidBody::Dynamic,
-        Collider::Box {
-            half_extents: Vec3::splat(1.0),
-        },
-    )).id();
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, start_y, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+        ))
+        .id();
 
     // 2. Run one initial frame to let the ECS spawn the physics body
     app.update();
@@ -58,16 +64,63 @@ fn test_fixed_timestep_prevents_micro_updates() {
         .resource_mut::<Time>()
         .advance_by(std::time::Duration::from_millis(1));
 
-    // 4. Update the app. 
+    // 4. Update the app.
     app.update();
 
     // 5. Check the box's position
     let transform = app.world().get::<Transform>(entity).unwrap();
 
-    // TDD ASSERTION: If physics is correctly using FixedUpdate (64Hz = 16ms), 
+    // TDD ASSERTION: If physics is correctly using FixedUpdate (64Hz = 16ms),
     // a 1ms advance should NOT trigger a physics step. The box should not have moved!
     assert_eq!(
         transform.translation.y, start_y,
         "The box moved! Physics is running on variable Update instead of FixedUpdate!"
+    );
+}
+
+#[test]
+fn test_despawn_cleans_up_physics_body() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
+
+    // 1. Spawn a box
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::default(),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+        ))
+        .id();
+
+    // 2. Run an Update so the physics body is created in Jolt
+    app.update();
+
+    // Verify it exists in our phonebook
+    let registry = app
+        .world()
+        .resource::<bolt_bevy::registry::PhysicsRegistry>();
+    assert!(
+        registry.get_body(entity).is_some(),
+        "Body was never registered!"
+    );
+
+    // 3. DESPAWN the entity from Bevy!
+    app.world_mut().despawn(entity);
+
+    // 4. Run an Update so our new cleanup system (which doesn't exist yet) can catch it
+    app.update();
+
+    // 5. TDD ASSERTION: The entity should be completely erased from the PhysicsRegistry
+    let registry = app
+        .world()
+        .resource::<bolt_bevy::registry::PhysicsRegistry>();
+    assert!(
+        registry.get_body(entity).is_none(),
+        "MEMORY LEAK! The entity was despawned in Bevy, but the physics body still exists in the
+  registry!"
     );
 }
