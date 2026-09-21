@@ -125,13 +125,22 @@ impl PhysicsWorld {
             let raw_physics_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_physics_system);
 
-            joltc_sys::JPC_BodyInterface_CreateAndAddBody(
+            let id = joltc_sys::JPC_BodyInterface_CreateAndAddBody(
                 body_interface,
                 &settings,
                 joltc_sys::JPC_ACTIVATION_ACTIVATE,
-            )
+            );
+
+            // Release the creation reference now that Jolt's Body holds its own reference
+            joltc_sys::JPC_Shape_Release(shape_ptr);
+
+            id
         };
 
+        // Check for invalid body ID from Jolt (cInvalidBodyID = 0xFFFFFFFF)
+        if body_id == 0xffff_ffff {
+            return None;
+        }
         Some(rolt::BodyId::new(body_id))
     }
 
@@ -223,6 +232,10 @@ fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
         if JPC_BoxShapeSettings_Create(&settings, &mut shape, &mut err) {
             Some(shape)
         } else {
+            // If creation fails, free the C++ error string allocated by Jolt
+            if !err.is_null() {
+                joltc_sys::JPC_String_delete(err);
+            }
             None
         }
     }
