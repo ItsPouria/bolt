@@ -5,6 +5,7 @@ use std::sync::Once;
 use std::{mem::ManuallyDrop, ptr};
 
 use bevy::ecs::resource::Resource;
+use bevy::log::error;
 use bevy::math::{Quat, Vec3};
 use bevy::transform::components::Transform;
 use joltc_sys::{
@@ -21,6 +22,7 @@ use crate::layers::{
 };
 
 static JOLT_INIT: Once = Once::new();
+pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
 
 /// The core Bevy resource representing the Jolt physics world.
 ///
@@ -138,16 +140,24 @@ impl PhysicsWorld {
         };
 
         // Check for invalid body ID from Jolt (cInvalidBodyID = 0xFFFFFFFF)
-        if body_id == 0xffff_ffff {
+        if body_id == INVALID_BODY_ID {
+            error!("Failed to create Jolt body: body limit reached or invalid settings");
             return None;
         }
         Some(rolt::BodyId::new(body_id))
     }
 
     pub fn get_transform(&self, body_id: rolt::BodyId) -> Option<(Vec3, Quat)> {
+        if body_id.raw() == INVALID_BODY_ID {
+            return None;
+        }
         unsafe {
             let raw_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return None;
+            }
 
             let pos = joltc_sys::JPC_BodyInterface_GetPosition(body_interface, body_id.raw());
             let rot = joltc_sys::JPC_BodyInterface_GetRotation(body_interface, body_id.raw());
@@ -186,10 +196,16 @@ impl PhysicsWorld {
     }
 
     pub fn destroy_body(&mut self, body_id: rolt::BodyId) {
+        if body_id.raw() == INVALID_BODY_ID {
+            return;
+        }
+
         unsafe {
             let raw_physics_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_physics_system);
-            joltc_sys::JPC_BodyInterface_RemoveBody(body_interface, body_id.raw());
+            if joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                joltc_sys::JPC_BodyInterface_RemoveBody(body_interface, body_id.raw());
+            }
             joltc_sys::JPC_BodyInterface_DestroyBody(body_interface, body_id.raw());
         }
     }
@@ -285,5 +301,29 @@ mod tests {
         let result = physics_world.spawn_box(box_size, &transform, &rigidbody);
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_transform_invalid_and_destroyed_body() {
+        let mut physics_world = PhysicsWorld::default();
+
+        // 1. Querying an invalid body ID returns None
+        let invalid_id = rolt::BodyId::new(INVALID_BODY_ID);
+        assert!(physics_world.get_transform(invalid_id).is_none());
+
+        // 2. Querying an unallocated body ID returns None
+        let fake_id = rolt::BodyId::new(9999);
+        assert!(physics_world.get_transform(fake_id).is_none());
+
+        // 3. Spawning a valid box returns Some(...)
+        let transform = Transform::from_xyz(1.0, 2.0, 3.0);
+        let body_id = physics_world
+            .spawn_box(Vec3::splat(1.0), &transform, &RigidBody::Dynamic)
+            .expect("Failed to spawn box");
+        assert!(physics_world.get_transform(body_id).is_some());
+
+        // 4. Destroying the body causes get_transform to return None
+        physics_world.destroy_body(body_id);
+        assert!(physics_world.get_transform(body_id).is_none());
     }
 }
