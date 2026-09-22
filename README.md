@@ -1,5 +1,7 @@
 # Bolt ⚡
 
+> ⚠️ **Work in Progress (WIP)**: This project is under active development. APIs are experimental and subject to breaking changes.
+
 High-performance [Jolt Physics](https://github.com/jrouwe/JoltPhysics) integration for the [Bevy](https://bevyengine.org) game engine.
 
 ---
