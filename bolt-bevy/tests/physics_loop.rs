@@ -99,12 +99,12 @@ fn test_despawn_cleans_up_physics_body() {
     // 2. Run an Update so the physics body is created in Jolt
     app.update();
 
-    // 3. Verify JoltBody component was attached and is live in Jolt
+    // 3. Verify JoltBody component exists and is live in Jolt
     let jolt_body = app
         .world()
         .get::<bolt_bevy::prelude::JoltBody>(entity)
         .copied()
-        .expect("JoltBody component was never attached to entity!");
+        .expect("JoltBody was not attached to entity!");
     let body_id = jolt_body.0;
 
     let physics_world = app.world().resource::<bolt_bevy::prelude::PhysicsWorld>();
@@ -113,10 +113,10 @@ fn test_despawn_cleans_up_physics_body() {
         "Body was not live in Jolt!"
     );
 
-    // 4. DESPAWN the entity from Bevy (this triggers the On<Remove, JoltBody> observer immediately)
+    // 4. DESPAWN the entity from Bevy!
     app.world_mut().despawn(entity);
 
-    // 5. Verify the body was destroyed in Jolt
+    // 5. TDD ASSERTION: The Jolt body should be destroyed from Jolt Physics
     let physics_world = app.world().resource::<bolt_bevy::prelude::PhysicsWorld>();
     assert!(
         physics_world.get_transform(body_id).is_none(),

@@ -174,10 +174,14 @@ impl PhysicsWorld {
     }
 
     pub fn step(&mut self, delta_time: f32, collision_steps: i32) {
+        if delta_time <= 0.0 || delta_time.is_nan() {
+            return;
+        }
+
         unsafe {
             self.physics_system.update(
                 delta_time,
-                collision_steps,
+                collision_steps.max(1),
                 self.temp_allocator.as_ptr(),
                 self.job_system.as_ptr(),
             );
@@ -355,5 +359,15 @@ mod tests {
             .body_interface()
             .user_data(body_id);
         assert_eq!(Entity::from_bits(user_data), test_entity);
+    }
+
+    #[test]
+    fn test_step_handles_invalid_delta_time() {
+        let mut physics_world = PhysicsWorld::default();
+
+        // Calling step with 0.0, negative dt, or NaN should safely return without panic
+        physics_world.step(0.0, 1);
+        physics_world.step(-1.0 / 60.0, 1);
+        physics_world.step(f32::NAN, 1);
     }
 }
