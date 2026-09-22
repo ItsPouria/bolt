@@ -4,15 +4,31 @@ use crate::components::JoltBody;
 use crate::prelude::{Collider, RigidBody};
 use crate::world::PhysicsWorld;
 
+#[allow(clippy::type_complexity)]
 pub fn spawn_physics_bodies(
     mut commands: Commands,
-    query: Query<(Entity, &Transform, &RigidBody, &Collider), Added<RigidBody>>,
+    query: Query<
+        (
+            Entity,
+            &Transform,
+            Option<&GlobalTransform>,
+            &RigidBody,
+            &Collider,
+        ),
+        Added<RigidBody>,
+    >,
     mut physics_world: ResMut<PhysicsWorld>,
 ) {
-    for (entity, transform, rigidbody, collider) in query.iter() {
+    for (entity, transform, global_transform, rigidbody, collider) in query.iter() {
+        let (position, rotation) = if let Some(global) = global_transform {
+            (global.translation(), global.rotation())
+        } else {
+            (transform.translation, transform.rotation)
+        };
+
         let body_id = match collider {
             Collider::Box { half_extents } => {
-                physics_world.spawn_box(entity, *half_extents, transform, rigidbody)
+                physics_world.spawn_box(entity, *half_extents, position, rotation, rigidbody)
             }
         };
 

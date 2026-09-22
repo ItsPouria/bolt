@@ -8,7 +8,6 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::resource::Resource;
 use bevy::log::error;
 use bevy::math::{Quat, Vec3};
-use bevy::transform::components::Transform;
 use joltc_sys::{
     JPC_BoxShapeSettings, JPC_BoxShapeSettings_Create, JPC_FactoryInit, JPC_JobSystemThreadPool,
     JPC_JobSystemThreadPool_delete, JPC_JobSystemThreadPool_new3, JPC_MAX_PHYSICS_BARRIERS,
@@ -87,7 +86,8 @@ impl PhysicsWorld {
         &mut self,
         entity: Entity,
         half_extents: Vec3,
-        transform: &Transform,
+        position: Vec3,
+        rotation: Quat,
         rigidbody: &RigidBody,
     ) -> Option<rolt::BodyId> {
         let shape_ptr = create_box_shape(half_extents)?;
@@ -98,17 +98,17 @@ impl PhysicsWorld {
         };
 
         let position = joltc_sys::JPC_Vec3 {
-            x: transform.translation.x,
-            y: transform.translation.y,
-            z: transform.translation.z,
+            x: position.x,
+            y: position.y,
+            z: position.z,
             _w: 0.0,
         };
 
         let rotation = joltc_sys::JPC_Quat {
-            x: transform.rotation.x,
-            y: transform.rotation.y,
-            z: transform.rotation.z,
-            w: transform.rotation.w,
+            x: rotation.x,
+            y: rotation.y,
+            z: rotation.z,
+            w: rotation.w,
         };
 
         let object_layer = if motion_type == joltc_sys::JPC_MOTION_TYPE_STATIC {
@@ -290,11 +290,16 @@ mod tests {
     #[test]
     fn test_spawn_static_box() {
         let mut physics_world = PhysicsWorld::default();
-        let transform = Transform::default();
         let rigidbody = RigidBody::Static;
         let box_size = Vec3::splat(1.0);
 
-        let result = physics_world.spawn_box(Entity::PLACEHOLDER, box_size, &transform, &rigidbody);
+        let result = physics_world.spawn_box(
+            Entity::PLACEHOLDER,
+            box_size,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            &rigidbody,
+        );
 
         assert!(result.is_some());
     }
@@ -302,11 +307,16 @@ mod tests {
     #[test]
     fn test_create_box_shape_failure() {
         let mut physics_world = PhysicsWorld::default();
-        let transform = Transform::default();
         let rigidbody = RigidBody::Static;
         let box_size = Vec3::splat(-1.0);
 
-        let result = physics_world.spawn_box(Entity::PLACEHOLDER, box_size, &transform, &rigidbody);
+        let result = physics_world.spawn_box(
+            Entity::PLACEHOLDER,
+            box_size,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            &rigidbody,
+        );
 
         assert!(result.is_none());
     }
@@ -324,12 +334,12 @@ mod tests {
         assert!(physics_world.get_transform(fake_id).is_none());
 
         // 3. Spawning a valid box returns Some(...)
-        let transform = Transform::from_xyz(1.0, 2.0, 3.0);
         let body_id = physics_world
             .spawn_box(
                 Entity::PLACEHOLDER,
                 Vec3::splat(1.0),
-                &transform,
+                Vec3::new(1.0, 2.0, 3.0),
+                Quat::IDENTITY,
                 &RigidBody::Dynamic,
             )
             .expect("Failed to spawn box");
@@ -349,7 +359,8 @@ mod tests {
             .spawn_box(
                 test_entity,
                 Vec3::splat(1.0),
-                &Transform::default(),
+                Vec3::ZERO,
+                Quat::IDENTITY,
                 &RigidBody::Dynamic,
             )
             .expect("Failed to spawn box");

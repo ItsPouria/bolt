@@ -123,3 +123,49 @@ fn test_despawn_cleans_up_physics_body() {
         "MEMORY LEAK! The entity was despawned in Bevy, but the Jolt physics body was not destroyed!"
     );
 }
+
+#[test]
+fn test_child_entity_spawns_at_world_coordinates() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(TransformPlugin);
+    app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
+
+    let parent = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(10.0, 20.0, 30.0),
+            GlobalTransform::IDENTITY,
+        ))
+        .id();
+
+    let child = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 5.0, 0.0),
+            RigidBody::Static,
+            Collider::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+            ChildOf(parent),
+        ))
+        .id();
+
+    // 1. Run an update so TransformPlugin propagates transforms and Bolt spawns bodies
+    app.update();
+
+    let jolt_body = app
+        .world()
+        .get::<bolt_bevy::prelude::JoltBody>(child)
+        .copied()
+        .expect("JoltBody component missing on child");
+
+    let physics_world = app.world().resource::<bolt_bevy::prelude::PhysicsWorld>();
+    let (pos, _) = physics_world
+        .get_transform(jolt_body.0)
+        .expect("Body transform not found");
+
+    // Child world pos should be (10.0, 25.0, 30.0), not local (0.0, 5.0, 0.0)
+    assert_eq!(pos, Vec3::new(10.0, 25.0, 30.0));
+}
+
