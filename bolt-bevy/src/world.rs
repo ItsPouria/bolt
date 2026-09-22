@@ -18,7 +18,8 @@ use joltc_sys::{
 use rolt::PhysicsSystem;
 
 use crate::layers::{
-    SimpleBroadPhaseLayer, SimpleObjectLayerPairFilter, SimpleObjectVsBroadPhaseLayerFilter,
+    OBJECT_LAYER_DYNAMIC, OBJECT_LAYER_STATIC, SimpleBroadPhaseLayer, SimpleObjectLayerPairFilter,
+    SimpleObjectVsBroadPhaseLayerFilter,
 };
 
 static JOLT_INIT: Once = Once::new();
@@ -109,9 +110,9 @@ impl PhysicsWorld {
         };
 
         let object_layer = if motion_type == joltc_sys::JPC_MOTION_TYPE_STATIC {
-            0
+            OBJECT_LAYER_STATIC.raw()
         } else {
-            1
+            OBJECT_LAYER_DYNAMIC.raw()
         };
 
         let settings = joltc_sys::JPC_BodyCreationSettings {
