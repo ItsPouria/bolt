@@ -169,3 +169,51 @@ fn test_child_entity_spawns_at_world_coordinates() {
     assert_eq!(pos, Vec3::new(10.0, 25.0, 30.0));
 }
 
+#[test]
+fn test_child_entity_dynamic_sync_transforms() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(TransformPlugin);
+    app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
+
+    let parent = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(10.0, 20.0, 30.0),
+            GlobalTransform::IDENTITY,
+        ))
+        .id();
+
+    let child = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+            ChildOf(parent),
+        ))
+        .id();
+
+    // 1. Initial frame: spawn body in Jolt
+    app.update();
+
+    // 2. Advance time by 1 second to let gravity pull the child down
+    app.world_mut()
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs(1),
+        ));
+
+    app.update();
+
+    let child_transform = app.world().get::<Transform>(child).unwrap();
+
+    // The child fell below the parent, so its local Y translation relative to parent must be negative
+    assert!(
+        child_transform.translation.y < 0.0,
+        "Child local Y translation did not sync relative to parent! Y is {}",
+        child_transform.translation.y
+    );
+}
+

@@ -1,9 +1,18 @@
+use bevy::math::Affine3A;
 use bevy::prelude::*;
 
 use crate::components::JoltBody;
 use crate::prelude::{Collider, RigidBody};
 use crate::world::PhysicsWorld;
 
+/// System that queries newly added [`RigidBody`] entities and creates their corresponding
+/// Jolt physics bodies in the [`PhysicsWorld`].
+///
+/// Coordinates are resolved in world space:
+/// - If [`GlobalTransform`] is available, its world translation and rotation are used.
+/// - Otherwise, the entity's local [`Transform`] is used as a fallback.
+///
+/// On successful body creation, a [`JoltBody`] component is inserted onto the entity.
 #[allow(clippy::type_complexity)]
 pub fn spawn_physics_bodies(
     mut commands: Commands,
@@ -40,18 +49,43 @@ pub fn spawn_physics_bodies(
     }
 }
 
+/// System that synchronizes Jolt Physics world-space transforms back into Bevy [`Transform`] components.
+///
+/// Runs during [`FixedUpdate`] after physics simulation stepping.
+///
+/// ### Hierarchy Handling:
+/// - **Root Entities**: Jolt world-space coordinates are written directly to [`Transform`].
+/// - **Child Entities** (entities with [`ChildOf`]): Jolt world coordinates are transformed
+///   into the parent's local coordinate frame using the inverse of the parent's [`GlobalTransform`]:
+///   $$\text{Local} = (\text{ParentGlobal})^{-1} \times \text{World}$$
+///   This prevents double-transformation when Bevy propagates transforms down the hierarchy.
+#[allow(clippy::type_complexity)]
 pub fn sync_transforms(
-    mut query: Query<(&mut Transform, &JoltBody), With<RigidBody>>,
+    mut query: Query<(&mut Transform, Option<&ChildOf>, &JoltBody), With<RigidBody>>,
+    parents: Query<&GlobalTransform>,
     physics_world: Res<PhysicsWorld>,
 ) {
-    for (mut transform, body) in query.iter_mut() {
-        if let Some((new_pos, new_rot)) = physics_world.get_transform(body.0) {
-            transform.translation = new_pos;
-            transform.rotation = new_rot;
+    for (mut transform, child_of, body) in query.iter_mut() {
+        if let Some((world_pos, world_rot)) = physics_world.get_transform(body.0) {
+            if let Some(parent_global) = child_of.and_then(|c| parents.get(c.parent()).ok()) {
+                let world_affine = Affine3A::from_rotation_translation(world_rot, world_pos);
+                let local_affine = parent_global.affine().inverse() * world_affine;
+                let (_, local_rotation, local_translation) =
+                    local_affine.to_scale_rotation_translation();
+
+                transform.translation = local_translation;
+                transform.rotation = local_rotation;
+                continue;
+            }
+
+            transform.translation = world_pos;
+            transform.rotation = world_rot;
         }
     }
 }
 
+/// Lifecycle observer that removes and destroys Jolt physics bodies when their
+/// Bevy entity or [`JoltBody`] component is despawned / removed.
 pub fn cleanup_despawned_physics_bodies(
     event: On<Remove, JoltBody>,
     query: Query<&JoltBody>,
