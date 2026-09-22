@@ -8,7 +8,6 @@ pub mod components;
 pub mod config;
 pub mod gravity;
 pub mod plugin;
-pub mod registry;
 pub mod systems;
 
 #[cfg(test)]
