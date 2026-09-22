@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::config::PhysicsConfig;
 use crate::gravity::{Gravity, apply_gravity};
 use crate::systems::sync_transforms;
 use crate::world::PhysicsWorld;
@@ -9,10 +10,10 @@ pub struct BoltPlugin {}
 
 impl Plugin for BoltPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<PhysicsConfig>();
         app.init_resource::<PhysicsWorld>();
-        app.init_resource::<Gravity>(); // Initialize the gravity resource
+        app.init_resource::<Gravity>();
 
-        // Spawn bodies, apply gravity, step the physics world, and finally sync the visuals
         app.add_systems(Update, (crate::systems::spawn_physics_bodies,));
         app.add_systems(
             FixedUpdate,
@@ -22,8 +23,11 @@ impl Plugin for BoltPlugin {
     }
 }
 
-fn step_physics(mut world: ResMut<PhysicsWorld>, time: Res<Time>) {
+fn step_physics(
+    mut world: ResMut<PhysicsWorld>,
+    config: Res<PhysicsConfig>,
+    time: Res<Time<Fixed>>,
+) {
     let delta_time = time.delta_secs();
-    let collision_steps = 1;
-    world.step(delta_time, collision_steps);
+    world.step(delta_time, config.collision_steps as i32);
 }
