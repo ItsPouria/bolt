@@ -13,7 +13,7 @@ pub fn spawn_physics_bodies(
         // We can cleanly match on any new collider shapes we add in the future!
         let body_id = match collider {
             Collider::Box { half_extents } => {
-                physics_world.spawn_box(*half_extents, transform, rigidbody)
+                physics_world.spawn_box(entity, *half_extents, transform, rigidbody)
             }
         };
 

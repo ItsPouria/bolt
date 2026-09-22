@@ -4,6 +4,7 @@ use std::ptr::NonNull;
 use std::sync::Once;
 use std::{mem::ManuallyDrop, ptr};
 
+use bevy::ecs::entity::Entity;
 use bevy::ecs::resource::Resource;
 use bevy::log::error;
 use bevy::math::{Quat, Vec3};
@@ -84,6 +85,7 @@ impl PhysicsWorld {
 
     pub fn spawn_box(
         &mut self,
+        entity: Entity,
         half_extents: Vec3,
         transform: &Transform,
         rigidbody: &RigidBody,
@@ -121,6 +123,7 @@ impl PhysicsWorld {
             MotionType: motion_type,
             ObjectLayer: object_layer,
             Shape: shape_ptr,
+            UserData: entity.to_bits(),
             ..Default::default()
         };
 
@@ -287,7 +290,7 @@ mod tests {
         let rigidbody = RigidBody::Static;
         let box_size = Vec3::splat(1.0);
 
-        let result = physics_world.spawn_box(box_size, &transform, &rigidbody);
+        let result = physics_world.spawn_box(Entity::PLACEHOLDER, box_size, &transform, &rigidbody);
 
         assert!(result.is_some());
     }
@@ -299,7 +302,7 @@ mod tests {
         let rigidbody = RigidBody::Static;
         let box_size = Vec3::splat(-1.0);
 
-        let result = physics_world.spawn_box(box_size, &transform, &rigidbody);
+        let result = physics_world.spawn_box(Entity::PLACEHOLDER, box_size, &transform, &rigidbody);
 
         assert!(result.is_none());
     }
@@ -319,12 +322,38 @@ mod tests {
         // 3. Spawning a valid box returns Some(...)
         let transform = Transform::from_xyz(1.0, 2.0, 3.0);
         let body_id = physics_world
-            .spawn_box(Vec3::splat(1.0), &transform, &RigidBody::Dynamic)
+            .spawn_box(
+                Entity::PLACEHOLDER,
+                Vec3::splat(1.0),
+                &transform,
+                &RigidBody::Dynamic,
+            )
             .expect("Failed to spawn box");
         assert!(physics_world.get_transform(body_id).is_some());
 
         // 4. Destroying the body causes get_transform to return None
         physics_world.destroy_body(body_id);
         assert!(physics_world.get_transform(body_id).is_none());
+    }
+
+    #[test]
+    fn test_spawn_box_stores_entity_user_data() {
+        let mut physics_world = PhysicsWorld::default();
+        let test_entity = Entity::from_raw_u32(42).unwrap();
+
+        let body_id = physics_world
+            .spawn_box(
+                test_entity,
+                Vec3::splat(1.0),
+                &Transform::default(),
+                &RigidBody::Dynamic,
+            )
+            .expect("Failed to spawn box");
+
+        let user_data = physics_world
+            .physics_system()
+            .body_interface()
+            .user_data(body_id);
+        assert_eq!(Entity::from_bits(user_data), test_entity);
     }
 }
