@@ -1,16 +1,15 @@
 use bevy::prelude::*;
 
+use crate::components::JoltBody;
 use crate::prelude::{Collider, RigidBody};
-use crate::registry::PhysicsRegistry;
 use crate::world::PhysicsWorld;
 
 pub fn spawn_physics_bodies(
+    mut commands: Commands,
     query: Query<(Entity, &Transform, &RigidBody, &Collider), Added<RigidBody>>,
     mut physics_world: ResMut<PhysicsWorld>,
-    mut registry: ResMut<PhysicsRegistry>,
 ) {
     for (entity, transform, rigidbody, collider) in query.iter() {
-        // We can cleanly match on any new collider shapes we add in the future!
         let body_id = match collider {
             Collider::Box { half_extents } => {
                 physics_world.spawn_box(entity, *half_extents, transform, rigidbody)
@@ -18,7 +17,7 @@ pub fn spawn_physics_bodies(
         };
 
         if let Some(id) = body_id {
-            registry.register(entity, id);
+            commands.entity(entity).insert(JoltBody(id));
         } else {
             error!("Failed to spawn physics body for entity {:?}", entity);
         }
@@ -26,37 +25,28 @@ pub fn spawn_physics_bodies(
 }
 
 pub fn sync_transforms(
-    mut query: Query<(Entity, &mut Transform), With<RigidBody>>,
-    physics_registry: Res<PhysicsRegistry>,
+    mut query: Query<(&mut Transform, &JoltBody), With<RigidBody>>,
     physics_world: Res<PhysicsWorld>,
 ) {
-    for (entity, mut transform) in query.iter_mut() {
-        let Some(body_id) = physics_registry.get_body(entity) else {
-            continue;
-        };
-
-        let Some((new_pos, new_rot)) = physics_world.get_transform(body_id) else {
-            continue;
-        };
-
-        transform.translation = new_pos;
-        transform.rotation = new_rot;
+    for (mut transform, body) in query.iter_mut() {
+        if let Some((new_pos, new_rot)) = physics_world.get_transform(body.0) {
+            transform.translation = new_pos;
+            transform.rotation = new_rot;
+        }
     }
 }
 
 pub fn cleanup_despawned_physics_bodies(
-    mut removed: RemovedComponents<RigidBody>,
+    event: On<Remove, JoltBody>,
+    query: Query<&JoltBody>,
     mut physics_world: ResMut<PhysicsWorld>,
-    mut registry: ResMut<PhysicsRegistry>,
 ) {
-    for entity in removed.read() {
-        if let Some(body_id) = registry.remove_body(entity) {
-            physics_world.destroy_body(body_id);
-            info!(
-                "Successfully cleaned up Jolt body for despawned entity {:?}",
-                entity
-            )
-        }
+    if let Ok(body) = query.get(event.entity) {
+        physics_world.destroy_body(body.0);
+        info!(
+            "Successfully cleaned up Jolt body for despawned entity {:?}",
+            event.entity
+        );
     }
 }
 
@@ -84,7 +74,6 @@ mod tests {
 
         app.update();
 
-        let registry = app.world().resource::<PhysicsRegistry>();
-        assert!(registry.get_body(broken_entity).is_none());
+        assert!(app.world().get::<JoltBody>(broken_entity).is_none());
     }
 }

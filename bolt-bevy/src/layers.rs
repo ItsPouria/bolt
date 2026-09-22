@@ -49,10 +49,7 @@ impl ObjectVsBroadPhaseLayerFilter for SimpleObjectVsBroadPhaseLayerFilter {
 pub struct SimpleObjectLayerPairFilter;
 impl ObjectLayerPairFilter for SimpleObjectLayerPairFilter {
     fn should_collide(&self, layer1: ObjectLayer, layer2: ObjectLayer) -> bool {
-        match (layer1, layer2) {
-            (OBJECT_LAYER_STATIC, OBJECT_LAYER_STATIC) => false,
-            _ => true,
-        }
+        !matches!((layer1, layer2), (OBJECT_LAYER_STATIC, OBJECT_LAYER_STATIC))
     }
 }
 

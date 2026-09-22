@@ -99,28 +99,27 @@ fn test_despawn_cleans_up_physics_body() {
     // 2. Run an Update so the physics body is created in Jolt
     app.update();
 
-    // Verify it exists in our phonebook
-    let registry = app
+    // 3. Verify JoltBody component was attached and is live in Jolt
+    let jolt_body = app
         .world()
-        .resource::<bolt_bevy::registry::PhysicsRegistry>();
+        .get::<bolt_bevy::prelude::JoltBody>(entity)
+        .copied()
+        .expect("JoltBody component was never attached to entity!");
+    let body_id = jolt_body.0;
+
+    let physics_world = app.world().resource::<bolt_bevy::prelude::PhysicsWorld>();
     assert!(
-        registry.get_body(entity).is_some(),
-        "Body was never registered!"
+        physics_world.get_transform(body_id).is_some(),
+        "Body was not live in Jolt!"
     );
 
-    // 3. DESPAWN the entity from Bevy!
+    // 4. DESPAWN the entity from Bevy (this triggers the On<Remove, JoltBody> observer immediately)
     app.world_mut().despawn(entity);
 
-    // 4. Run an Update so our new cleanup system (which doesn't exist yet) can catch it
-    app.update();
-
-    // 5. TDD ASSERTION: The entity should be completely erased from the PhysicsRegistry
-    let registry = app
-        .world()
-        .resource::<bolt_bevy::registry::PhysicsRegistry>();
+    // 5. Verify the body was destroyed in Jolt
+    let physics_world = app.world().resource::<bolt_bevy::prelude::PhysicsWorld>();
     assert!(
-        registry.get_body(entity).is_none(),
-        "MEMORY LEAK! The entity was despawned in Bevy, but the physics body still exists in the
-  registry!"
+        physics_world.get_transform(body_id).is_none(),
+        "MEMORY LEAK! The entity was despawned in Bevy, but the Jolt physics body was not destroyed!"
     );
 }
