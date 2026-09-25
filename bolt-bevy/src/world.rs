@@ -228,6 +228,52 @@ impl PhysicsWorld {
         }
     }
 
+    pub fn set_linear_velocity(&mut self, body_id: rolt::BodyId, linear_velocity: Vec3) {
+        if body_id.raw() == INVALID_BODY_ID {
+            return;
+        }
+        unsafe {
+            let raw_system = self.physics_system.raw();
+            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return;
+            }
+
+            let jolt_vel = joltc_sys::JPC_Vec3 {
+                x: linear_velocity.x,
+                y: linear_velocity.y,
+                z: linear_velocity.z,
+                _w: 0.0,
+            };
+
+            joltc_sys::JPC_BodyInterface_SetLinearVelocity(body_interface, body_id.raw(), jolt_vel);
+        }
+    }
+
+    pub fn set_angular_velocity(&mut self, body_id: rolt::BodyId, angular_velocity: Vec3) {
+        if body_id.raw() == INVALID_BODY_ID {
+            return;
+        }
+        unsafe {
+            let raw_system = self.physics_system.raw();
+            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return;
+            }
+
+            let jolt_vel = joltc_sys::JPC_Vec3 {
+                x: angular_velocity.x,
+                y: angular_velocity.y,
+                z: angular_velocity.z,
+                _w: 0.0,
+            };
+
+            joltc_sys::JPC_BodyInterface_SetAngularVelocity(body_interface, body_id.raw(), jolt_vel);
+        }
+    }
+
     pub fn step(&mut self, delta_time: f32, collision_steps: i32) {
         if delta_time <= 0.0 || delta_time.is_nan() {
             return;
