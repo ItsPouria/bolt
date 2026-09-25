@@ -165,3 +165,20 @@ mod tests {
         assert!(app.world().get::<JoltBody>(broken_entity).is_none());
     }
 }
+
+pub fn apply_velocities(
+    mut physics_world: ResMut<PhysicsWorld>,
+    query: Query<
+        (&JoltBody, Option<&LinearVelocity>, Option<&AngularVelocity>),
+        Or<(Changed<LinearVelocity>, Changed<AngularVelocity>)>,
+    >,
+) {
+    for (body, lin_vel, ang_vel) in query.iter() {
+        if let Some(vel) = lin_vel {
+            physics_world.set_linear_velocity(body.0, **vel);
+        }
+        if let Some(vel) = ang_vel {
+            physics_world.set_angular_velocity(body.0, **vel);
+        }
+    }
+}
