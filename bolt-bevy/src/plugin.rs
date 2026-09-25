@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::config::PhysicsConfig;
 use crate::gravity::{Gravity, apply_gravity};
-use crate::systems::sync_transforms;
+use crate::systems::{apply_velocities, sync_transforms};
 use crate::world::PhysicsWorld;
 
 #[derive(Default, Debug)]
@@ -17,7 +17,7 @@ impl Plugin for BoltPlugin {
         app.add_systems(Update, (crate::systems::spawn_physics_bodies,));
         app.add_systems(
             FixedUpdate,
-            (apply_gravity, step_physics, sync_transforms).chain(),
+            (apply_velocities, apply_gravity, step_physics, sync_transforms).chain(),
         );
         app.add_observer(crate::systems::cleanup_despawned_physics_bodies);
     }
