@@ -6,6 +6,7 @@ use std::time::Duration;
 fn test_gravity_pulls_dynamic_bodies() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    app.add_plugins(TransformPlugin);
     app.add_plugins(BoltPlugin::default());
 
     let entity = app
@@ -41,6 +42,7 @@ fn test_gravity_pulls_dynamic_bodies() {
 fn test_fixed_timestep_prevents_micro_updates() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    app.add_plugins(TransformPlugin);
     app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
 
     // 1. Spawn a box exactly at Y = 10.0
@@ -82,6 +84,7 @@ fn test_fixed_timestep_prevents_micro_updates() {
 fn test_despawn_cleans_up_physics_body() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    app.add_plugins(TransformPlugin);
     app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
 
     // 1. Spawn a box
@@ -129,6 +132,7 @@ fn test_child_entity_spawns_at_world_coordinates() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(TransformPlugin);
+    app.add_plugins(TransformPlugin);
     app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
 
     let parent = app
@@ -174,6 +178,7 @@ fn test_child_entity_dynamic_sync_transforms() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(TransformPlugin);
+    app.add_plugins(TransformPlugin);
     app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
 
     let parent = app
@@ -217,3 +222,44 @@ fn test_child_entity_dynamic_sync_transforms() {
     );
 }
 
+#[test]
+fn test_kinematic_body_defies_gravity() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(TransformPlugin);
+    app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
+
+    // 1. Spawn a Kinematic box high in the air
+    let start_y = 10.0;
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, start_y, 0.0),
+            RigidBody::Kinematic,
+            Collider::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+        ))
+        .id();
+
+    // 2. Run one initial frame to let the ECS spawn the physics body in Jolt
+    app.update();
+
+    // 3. Advance time by 1 full second
+    app.world_mut()
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_secs(1),
+        ));
+
+    // 4. Update the app to step the physics simulation
+    app.update();
+
+    // 5. Check the box's position
+    let transform = app.world().get::<Transform>(entity).unwrap();
+
+    // 6. ASSERTION: Kinematic bodies ignore gravity. It should still be exactly at start_y.
+    assert_eq!(
+        transform.translation.y, start_y,
+        "Kinematic body moved! It should not be affected by gravity."
+    );
+}
