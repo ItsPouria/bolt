@@ -8,6 +8,9 @@ pub enum RigidBody {
     Dynamic,
     /// A static body that does not move and has infinite mass (e.g. terrain, floors, walls).
     Static,
+    /// A kinematic body that is not affected by gravity or forces, but can push dynamic bodies.
+    /// It is moved manually by setting its velocity or position.
+    Kinematic,
 }
 
 /// The geometric collision shape attached to a rigid body.
