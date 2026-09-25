@@ -26,3 +26,15 @@ pub enum Collider {
 /// A component attached to Bevy entities that have a live Jolt Physics body.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JoltBody(pub BodyId);
+
+/// The linear velocity of a rigid body in meters per second.
+/// 
+/// Modifying this component will update the body's velocity in the physics engine.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut)]
+pub struct LinearVelocity(pub Vec3);
+
+/// The angular velocity of a rigid body in radians per second around the local X, Y, and Z axes.
+/// 
+/// Modifying this component will update the body's angular velocity in the physics engine.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut)]
+pub struct AngularVelocity(pub Vec3);
