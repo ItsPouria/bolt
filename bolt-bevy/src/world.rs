@@ -304,6 +304,23 @@ mod tests {
     }
 
     #[test]
+    fn test_spawn_kinematic_box() {
+        let mut physics_world = PhysicsWorld::default();
+        let rigidbody = RigidBody::Kinematic;
+        let box_size = Vec3::splat(1.0);
+
+        let result = physics_world.spawn_box(
+            Entity::PLACEHOLDER,
+            box_size,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            &rigidbody,
+        );
+
+        assert!(result.is_some());
+    }
+
+    #[test]
     fn test_create_box_shape_failure() {
         let mut physics_world = PhysicsWorld::default();
         let rigidbody = RigidBody::Static;
