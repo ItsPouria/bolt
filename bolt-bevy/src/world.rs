@@ -190,6 +190,44 @@ impl PhysicsWorld {
         }
     }
 
+    pub fn get_linear_velocity(&self, body_id: rolt::BodyId) -> Option<Vec3> {
+        if body_id.raw() == INVALID_BODY_ID {
+            return None;
+        }
+        unsafe {
+            let raw_system = self.physics_system.raw();
+            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return None;
+            }
+
+            let lin_vel =
+                joltc_sys::JPC_BodyInterface_GetLinearVelocity(body_interface, body_id.raw());
+
+            Some(Vec3::new(lin_vel.x, lin_vel.y, lin_vel.z))
+        }
+    }
+
+    pub fn get_angular_velocity(&self, body_id: rolt::BodyId) -> Option<Vec3> {
+        if body_id.raw() == INVALID_BODY_ID {
+            return None;
+        }
+        unsafe {
+            let raw_system = self.physics_system.raw();
+            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return None;
+            }
+
+            let ang_vel =
+                joltc_sys::JPC_BodyInterface_GetAngularVelocity(body_interface, body_id.raw());
+
+            Some(Vec3::new(ang_vel.x, ang_vel.y, ang_vel.z))
+        }
+    }
+
     pub fn step(&mut self, delta_time: f32, collision_steps: i32) {
         if delta_time <= 0.0 || delta_time.is_nan() {
             return;
