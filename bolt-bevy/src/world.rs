@@ -112,10 +112,9 @@ impl PhysicsWorld {
             w: rotation.w,
         };
 
-        let object_layer = if motion_type == joltc_sys::JPC_MOTION_TYPE_STATIC {
-            OBJECT_LAYER_STATIC.raw()
-        } else {
-            OBJECT_LAYER_DYNAMIC.raw()
+        let object_layer = match rigidbody {
+            RigidBody::Static => OBJECT_LAYER_STATIC.raw(),
+            RigidBody::Dynamic | RigidBody::Kinematic => OBJECT_LAYER_DYNAMIC.raw(),
         };
 
         let settings = joltc_sys::JPC_BodyCreationSettings {
