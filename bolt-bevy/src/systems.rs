@@ -1,4 +1,4 @@
-use bevy::math::{Affine3A, VectorSpace};
+use bevy::math::{Affine3A};
 use bevy::prelude::*;
 
 use crate::components::{AngularVelocity, JoltBody, LinearVelocity};
@@ -81,11 +81,17 @@ pub fn spawn_physics_bodies(
 ///   This prevents double-transformation when Bevy propagates transforms down the hierarchy.
 #[allow(clippy::type_complexity)]
 pub fn sync_transforms(
-    mut query: Query<(&mut Transform, Option<&ChildOf>, &JoltBody), With<RigidBody>>,
+    mut query: Query<(
+        &mut Transform,
+        Option<&ChildOf>,
+        &JoltBody,
+        Option<&mut LinearVelocity>,
+        Option<&mut AngularVelocity>,
+    ), With<RigidBody>>,
     parents: Query<&GlobalTransform>,
     physics_world: Res<PhysicsWorld>,
 ) {
-    for (mut transform, child_of, body) in query.iter_mut() {
+    for (mut transform, child_of, body, lin_vel, ang_vel) in query.iter_mut() {
         if let Some((world_pos, world_rot)) = physics_world.get_transform(body.0) {
             if let Some(parent_global) = child_of.and_then(|c| parents.get(c.parent()).ok()) {
                 let world_affine = Affine3A::from_rotation_translation(world_rot, world_pos);
@@ -100,6 +106,18 @@ pub fn sync_transforms(
 
             transform.translation = world_pos;
             transform.rotation = world_rot;
+        }
+
+        if let Some(mut velocity) = lin_vel {
+            if let Some(jolt_vel) = physics_world.get_linear_velocity(body.0) {
+                velocity.0 = jolt_vel;
+            }
+        }
+
+        if let Some(mut velocity) = ang_vel {
+            if let Some(jolt_vel) = physics_world.get_angular_velocity(body.0) {
+                velocity.0 = jolt_vel;
+            }
         }
     }
 }
