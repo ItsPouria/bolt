@@ -95,6 +95,7 @@ impl PhysicsWorld {
         let motion_type = match rigidbody {
             RigidBody::Dynamic => joltc_sys::JPC_MOTION_TYPE_DYNAMIC,
             RigidBody::Static => joltc_sys::JPC_MOTION_TYPE_STATIC,
+            RigidBody::Kinematic => joltc_sys::JPC_MOTION_TYPE_KINEMATIC,
         };
 
         let position = joltc_sys::JPC_Vec3 {
@@ -137,7 +138,6 @@ impl PhysicsWorld {
                 joltc_sys::JPC_ACTIVATION_ACTIVATE,
             );
 
-            // Release the creation reference now that Jolt's Body holds its own reference
             joltc_sys::JPC_Shape_Release(shape_ptr);
 
             id
