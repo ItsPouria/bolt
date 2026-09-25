@@ -132,7 +132,6 @@ fn test_child_entity_spawns_at_world_coordinates() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(TransformPlugin);
-    app.add_plugins(TransformPlugin);
     app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
 
     let parent = app
@@ -177,7 +176,6 @@ fn test_child_entity_spawns_at_world_coordinates() {
 fn test_child_entity_dynamic_sync_transforms() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    app.add_plugins(TransformPlugin);
     app.add_plugins(TransformPlugin);
     app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
 

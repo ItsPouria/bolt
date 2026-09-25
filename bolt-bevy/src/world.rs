@@ -89,6 +89,8 @@ impl PhysicsWorld {
         position: Vec3,
         rotation: Quat,
         rigidbody: &RigidBody,
+        linear_velocity: Vec3,
+        angular_velocity: Vec3,
     ) -> Option<rolt::BodyId> {
         let shape_ptr = create_box_shape(half_extents)?;
 
@@ -112,6 +114,20 @@ impl PhysicsWorld {
             w: rotation.w,
         };
 
+        let lin_vel = joltc_sys::JPC_Vec3 {
+            x: linear_velocity.x,
+            y: linear_velocity.y,
+            z: linear_velocity.z,
+            _w: 0.0,
+        };
+
+        let ang_vel = joltc_sys::JPC_Vec3 {
+            x: angular_velocity.x,
+            y: angular_velocity.y,
+            z: angular_velocity.z,
+            _w: 0.0,
+        };
+
         let object_layer = match rigidbody {
             RigidBody::Static => OBJECT_LAYER_STATIC.raw(),
             RigidBody::Dynamic | RigidBody::Kinematic => OBJECT_LAYER_DYNAMIC.raw(),
@@ -123,6 +139,8 @@ impl PhysicsWorld {
             MotionType: motion_type,
             ObjectLayer: object_layer,
             Shape: shape_ptr,
+            LinearVelocity: lin_vel,
+            AngularVelocity: ang_vel,
             UserData: entity.to_bits(),
             ..Default::default()
         };
@@ -298,6 +316,8 @@ mod tests {
             Vec3::ZERO,
             Quat::IDENTITY,
             &rigidbody,
+            Vec3::ZERO,
+            Vec3::ZERO,
         );
 
         assert!(result.is_some());
@@ -315,6 +335,8 @@ mod tests {
             Vec3::ZERO,
             Quat::IDENTITY,
             &rigidbody,
+            Vec3::ZERO,
+            Vec3::ZERO,
         );
 
         assert!(result.is_some());
@@ -332,6 +354,8 @@ mod tests {
             Vec3::ZERO,
             Quat::IDENTITY,
             &rigidbody,
+            Vec3::ZERO,
+            Vec3::ZERO,
         );
 
         assert!(result.is_none());
@@ -357,6 +381,8 @@ mod tests {
                 Vec3::new(1.0, 2.0, 3.0),
                 Quat::IDENTITY,
                 &RigidBody::Dynamic,
+                Vec3::ZERO,
+                Vec3::ZERO,
             )
             .expect("Failed to spawn box");
         assert!(physics_world.get_transform(body_id).is_some());
@@ -378,6 +404,8 @@ mod tests {
                 Vec3::ZERO,
                 Quat::IDENTITY,
                 &RigidBody::Dynamic,
+                Vec3::ZERO,
+                Vec3::ZERO,
             )
             .expect("Failed to spawn box");
 

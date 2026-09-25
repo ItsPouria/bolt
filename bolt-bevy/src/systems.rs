@@ -1,7 +1,7 @@
-use bevy::math::Affine3A;
+use bevy::math::{Affine3A, VectorSpace};
 use bevy::prelude::*;
 
-use crate::components::JoltBody;
+use crate::components::{AngularVelocity, JoltBody, LinearVelocity};
 use crate::prelude::{Collider, RigidBody};
 use crate::world::PhysicsWorld;
 
@@ -23,22 +23,42 @@ pub fn spawn_physics_bodies(
             Option<&GlobalTransform>,
             &RigidBody,
             &Collider,
+            Option<&LinearVelocity>,
+            Option<&AngularVelocity>,
         ),
         Added<RigidBody>,
     >,
     mut physics_world: ResMut<PhysicsWorld>,
 ) {
-    for (entity, transform, global_transform, rigidbody, collider) in query.iter() {
+    for (
+        entity,
+        transform,
+        global_transform,
+        rigidbody,
+        collider,
+        linear_velocity,
+        angular_velocity,
+    ) in query.iter()
+    {
         let (position, rotation) = if let Some(global) = global_transform {
             (global.translation(), global.rotation())
         } else {
             (transform.translation, transform.rotation)
         };
 
+        let lin_vel = linear_velocity.map(|v| **v).unwrap_or(Vec3::ZERO);
+        let ang_vel = angular_velocity.map(|v| **v).unwrap_or(Vec3::ZERO);
+
         let body_id = match collider {
-            Collider::Box { half_extents } => {
-                physics_world.spawn_box(entity, *half_extents, position, rotation, rigidbody)
-            }
+            Collider::Box { half_extents } => physics_world.spawn_box(
+                entity,
+                *half_extents,
+                position,
+                rotation,
+                rigidbody,
+                lin_vel,
+                ang_vel,
+            ),
         };
 
         if let Some(id) = body_id {
