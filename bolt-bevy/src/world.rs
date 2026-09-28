@@ -270,7 +270,11 @@ impl PhysicsWorld {
                 _w: 0.0,
             };
 
-            joltc_sys::JPC_BodyInterface_SetAngularVelocity(body_interface, body_id.raw(), jolt_vel);
+            joltc_sys::JPC_BodyInterface_SetAngularVelocity(
+                body_interface,
+                body_id.raw(),
+                jolt_vel,
+            );
         }
     }
 
@@ -508,5 +512,39 @@ mod tests {
         physics_world.step(0.0, 1);
         physics_world.step(-1.0 / 60.0, 1);
         physics_world.step(f32::NAN, 1);
+    }
+
+    #[test]
+    fn test_velocity_getters_and_setters() {
+        let mut physics_world = PhysicsWorld::default();
+        let rigidbody = RigidBody::Dynamic;
+        let box_size = Vec3::splat(1.0);
+
+        let body_id = physics_world
+            .spawn_box(
+                Entity::PLACEHOLDER,
+                box_size,
+                Vec3::ZERO,
+                Quat::IDENTITY,
+                &rigidbody,
+                Vec3::ZERO,
+                Vec3::ZERO,
+            )
+            .expect("Failed to spawn box");
+
+        let target_lin_vel = Vec3::new(1.0, 2.0, 3.0);
+        let target_ang_vel = Vec3::new(4.0, 5.0, 6.0);
+
+        physics_world.set_linear_velocity(body_id, target_lin_vel);
+        physics_world.set_angular_velocity(body_id, target_ang_vel);
+
+        assert_eq!(
+            physics_world.get_linear_velocity(body_id).unwrap(),
+            target_lin_vel
+        );
+        assert_eq!(
+            physics_world.get_angular_velocity(body_id).unwrap(),
+            target_ang_vel
+        );
     }
 }
