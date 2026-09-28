@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 bolt-bevy = {path = "../bolt-bevy"}
 bevy = "0.19"
+rand = "0.10.3"

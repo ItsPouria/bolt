@@ -1,11 +1,16 @@
 use bevy::prelude::*;
 use bolt_bevy::prelude::*;
 
+#[derive(Resource)]
+struct SpawnTimer(Timer);
+
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins) // Upgrade to a real window!
+        .add_plugins(DefaultPlugins)
         .add_plugins(BoltPlugin::default())
+        .insert_resource(SpawnTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
         .add_systems(Startup, setup)
+        .add_systems(Update, spawn_random_boxes)
         .run();
 }
 
@@ -36,7 +41,9 @@ fn setup(
         MeshMaterial3d(materials.add(Color::srgb(0.3, 0.5, 0.3))),
         Transform::from_xyz(0.0, -1.0, 0.0),
         RigidBody::Static,
-        Collider::Box { half_extents: floor_size / 2.0 },
+        Collider::Box {
+            half_extents: floor_size / 2.0,
+        },
     ));
 
     // 4. The Falling Box (Dynamic)
@@ -46,6 +53,40 @@ fn setup(
         MeshMaterial3d(materials.add(Color::srgb(0.8, 0.2, 0.2))),
         Transform::from_xyz(0.0, 5.0, 0.0),
         RigidBody::Dynamic,
-        Collider::Box { half_extents: box_size / 2.0 },
+        Collider::Box {
+            half_extents: box_size / 2.0,
+        },
     ));
+}
+
+
+fn spawn_random_boxes(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut timer: ResMut<SpawnTimer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if timer.0.tick(time.delta()).just_finished() {
+        // Generate random positions using rand::random (0.0 to 1.0)
+        let x = (rand::random::<f32>() - 0.5) * 8.0; // -4.0 to 4.0
+        let z = (rand::random::<f32>() - 0.5) * 8.0; // -4.0 to 4.0
+        let y = rand::random::<f32>() * 5.0 + 5.0; // 5.0 to 10.0
+        
+        let r = rand::random::<f32>();
+        let g = rand::random::<f32>();
+        let b = rand::random::<f32>();
+        
+        let box_size = Vec3::splat(1.0);
+        
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::from_size(box_size))),
+            MeshMaterial3d(materials.add(Color::srgb(r, g, b))),
+            Transform::from_xyz(x, y, z),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: box_size / 2.0,
+            },
+        ));
+    }
 }
