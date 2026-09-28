@@ -1,4 +1,4 @@
-use bevy::math::{Affine3A};
+use bevy::math::Affine3A;
 use bevy::prelude::*;
 
 use crate::components::{AngularVelocity, JoltBody, LinearVelocity};
@@ -81,13 +81,16 @@ pub fn spawn_physics_bodies(
 ///   This prevents double-transformation when Bevy propagates transforms down the hierarchy.
 #[allow(clippy::type_complexity)]
 pub fn sync_transforms(
-    mut query: Query<(
-        &mut Transform,
-        Option<&ChildOf>,
-        &JoltBody,
-        Option<&mut LinearVelocity>,
-        Option<&mut AngularVelocity>,
-    ), With<RigidBody>>,
+    mut query: Query<
+        (
+            &mut Transform,
+            Option<&ChildOf>,
+            &JoltBody,
+            Option<&mut LinearVelocity>,
+            Option<&mut AngularVelocity>,
+        ),
+        With<RigidBody>,
+    >,
     parents: Query<&GlobalTransform>,
     physics_world: Res<PhysicsWorld>,
 ) {
@@ -138,6 +141,26 @@ pub fn cleanup_despawned_physics_bodies(
     }
 }
 
+/// Scans the ECS for any physics bodies whose [`LinearVelocity`] or [`AngularVelocity`] 
+/// components were modified by the user this frame, and synchronizes those changes 
+/// down into the internal Jolt physics engine before the next simulation step.
+pub fn apply_velocities(
+    mut physics_world: ResMut<PhysicsWorld>,
+    query: Query<
+        (&JoltBody, Option<&LinearVelocity>, Option<&AngularVelocity>),
+        Or<(Changed<LinearVelocity>, Changed<AngularVelocity>)>,
+    >,
+) {
+    for (body, lin_vel, ang_vel) in query.iter() {
+        if let Some(vel) = lin_vel {
+            physics_world.set_linear_velocity(body.0, **vel);
+        }
+        if let Some(vel) = ang_vel {
+            physics_world.set_angular_velocity(body.0, **vel);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,22 +186,5 @@ mod tests {
         app.update();
 
         assert!(app.world().get::<JoltBody>(broken_entity).is_none());
-    }
-}
-
-pub fn apply_velocities(
-    mut physics_world: ResMut<PhysicsWorld>,
-    query: Query<
-        (&JoltBody, Option<&LinearVelocity>, Option<&AngularVelocity>),
-        Or<(Changed<LinearVelocity>, Changed<AngularVelocity>)>,
-    >,
-) {
-    for (body, lin_vel, ang_vel) in query.iter() {
-        if let Some(vel) = lin_vel {
-            physics_world.set_linear_velocity(body.0, **vel);
-        }
-        if let Some(vel) = ang_vel {
-            physics_world.set_angular_velocity(body.0, **vel);
-        }
     }
 }
