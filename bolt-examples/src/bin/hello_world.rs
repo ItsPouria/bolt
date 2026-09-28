@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bolt_bevy::prelude::*;
+use bolt_examples::ExampleStatsPlugin;
 
 #[derive(Resource)]
 struct SpawnTimer(Timer);
@@ -8,6 +9,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(BoltPlugin::default())
+        .add_plugins(ExampleStatsPlugin)
         .insert_resource(SpawnTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
         .add_systems(Startup, setup)
         .add_systems(Update, spawn_random_boxes)
