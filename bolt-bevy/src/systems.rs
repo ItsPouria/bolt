@@ -69,16 +69,19 @@ pub fn spawn_physics_bodies(
     }
 }
 
-/// System that synchronizes Jolt Physics world-space transforms back into Bevy [`Transform`] components.
+/// Synchronizes physics state from the Jolt physics engine back into the Bevy ECS.
 ///
 /// Runs during [`FixedUpdate`] after physics simulation stepping.
 ///
-/// ### Hierarchy Handling:
+/// ### Transforms & Hierarchy Handling:
 /// - **Root Entities**: Jolt world-space coordinates are written directly to [`Transform`].
 /// - **Child Entities** (entities with [`ChildOf`]): Jolt world coordinates are transformed
-///   into the parent's local coordinate frame using the inverse of the parent's [`GlobalTransform`]:
-///   $$\text{Local} = (\text{ParentGlobal})^{-1} \times \text{World}$$
+///   into the parent's local coordinate frame using the inverse of the parent's [`GlobalTransform`].
 ///   This prevents double-transformation when Bevy propagates transforms down the hierarchy.
+///
+/// ### Velocities:
+/// If the entity possesses a [`LinearVelocity`] or [`AngularVelocity`] component, it will be
+/// overwritten with the current velocity of the physics body from the simulation step.
 #[allow(clippy::type_complexity)]
 pub fn sync_transforms(
     mut query: Query<
@@ -111,16 +114,16 @@ pub fn sync_transforms(
             transform.rotation = world_rot;
         }
 
-        if let Some(mut velocity) = lin_vel {
-            if let Some(jolt_vel) = physics_world.get_linear_velocity(body.0) {
-                velocity.0 = jolt_vel;
-            }
+        if let (Some(mut velocity), Some(jolt_vel)) =
+            (lin_vel, physics_world.get_linear_velocity(body.0))
+        {
+            velocity.0 = jolt_vel;
         }
 
-        if let Some(mut velocity) = ang_vel {
-            if let Some(jolt_vel) = physics_world.get_angular_velocity(body.0) {
-                velocity.0 = jolt_vel;
-            }
+        if let (Some(mut velocity), Some(jolt_vel)) =
+            (ang_vel, physics_world.get_angular_velocity(body.0))
+        {
+            velocity.0 = jolt_vel;
         }
     }
 }
@@ -141,8 +144,8 @@ pub fn cleanup_despawned_physics_bodies(
     }
 }
 
-/// Scans the ECS for any physics bodies whose [`LinearVelocity`] or [`AngularVelocity`] 
-/// components were modified by the user this frame, and synchronizes those changes 
+/// Scans the ECS for any physics bodies whose [`LinearVelocity`] or [`AngularVelocity`]
+/// components were modified by the user this frame, and synchronizes those changes
 /// down into the internal Jolt physics engine before the next simulation step.
 pub fn apply_velocities(
     mut physics_world: ResMut<PhysicsWorld>,
