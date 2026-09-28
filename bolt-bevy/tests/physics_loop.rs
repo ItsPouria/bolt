@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bolt_bevy::prelude::*;
+use rolt::CollideShapeCollector;
 use std::time::Duration;
 
 #[test]
@@ -259,5 +260,44 @@ fn test_kinematic_body_defies_gravity() {
     assert_eq!(
         transform.translation.y, start_y,
         "Kinematic body moved! It should not be affected by gravity."
+    );
+}
+
+#[test]
+fn test_apply_velocities_syncs_with_physics_engine() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(TransformPlugin);
+    app.add_plugins(BoltPlugin::default());
+
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            RigidBody::Kinematic,
+            Collider::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+            LinearVelocity(Vec3::new(0.0, 10.0, 0.0)),
+        ))
+        .id();
+
+    app.update();
+
+    // Advance time in smaller increments to avoid Bevy's FixedUpdate catch-up limits
+    for _ in 0..10 {
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(100),
+            ));
+        app.update();
+    }
+
+    let transform = app.world().get::<Transform>(entity).unwrap();
+
+    assert_eq!(
+        transform.translation.y, 10.0,
+        "Kinematic body did not move at the correct velocity! Expected 10.0, got {}!",
+        transform.translation.y
     );
 }
