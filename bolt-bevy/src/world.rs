@@ -40,7 +40,9 @@ impl PhysicsWorld {
     /// Creates a new physics world with default settings.
     pub fn new(config: PhysicsConfig) -> Self {
         // Initialize the Jolt core. This is required before any Jolt objects can be created.
-        JOLT_INIT.call_once(|| unsafe {
+        JOLT_INIT.call_once(|| 
+        // SAFETY: Initializing the Jolt C-API is safe to call exactly once globally.
+        unsafe {
             JPC_RegisterDefaultAllocator();
             JPC_FactoryInit();
             JPC_RegisterTypes();
@@ -58,9 +60,11 @@ impl PhysicsWorld {
             SimpleObjectLayerPairFilter,
         );
 
+        // SAFETY: 10MB is a valid size for the Jolt temp allocator.
         let temp_allocator_ptr = unsafe { JPC_TempAllocatorImpl_new(10 * 1024 * 1024) }; // 10 MB
         let temp_allocator = NonNull::new(temp_allocator_ptr)
             .expect("Failed to allocate Jolt TempAllocator: Out of memory");
+        // SAFETY: Thread counts and max jobs constants are valid parameters for Jolt.
         let job_system_ptr = unsafe {
             JPC_JobSystemThreadPool_new3(
                 JPC_MAX_PHYSICS_JOBS as u32,
@@ -145,6 +149,7 @@ impl PhysicsWorld {
             ..Default::default()
         };
 
+        // SAFETY: settings and shape_ptr are valid, and motion types match Jolt requirements.
         let body_id = unsafe {
             let raw_physics_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_physics_system);
@@ -172,6 +177,7 @@ impl PhysicsWorld {
         if body_id.raw() == INVALID_BODY_ID {
             return None;
         }
+        // SAFETY: We verify the body ID is valid and added before querying its state.
         unsafe {
             let raw_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
@@ -194,6 +200,7 @@ impl PhysicsWorld {
         if body_id.raw() == INVALID_BODY_ID {
             return None;
         }
+        // SAFETY: We verify the body ID is valid and added before querying its state.
         unsafe {
             let raw_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
@@ -213,6 +220,7 @@ impl PhysicsWorld {
         if body_id.raw() == INVALID_BODY_ID {
             return None;
         }
+        // SAFETY: We verify the body ID is valid and added before querying its state.
         unsafe {
             let raw_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
@@ -232,6 +240,7 @@ impl PhysicsWorld {
         if body_id.raw() == INVALID_BODY_ID {
             return;
         }
+        // SAFETY: We verify the body ID is valid and added before mutating its state.
         unsafe {
             let raw_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
@@ -255,6 +264,7 @@ impl PhysicsWorld {
         if body_id.raw() == INVALID_BODY_ID {
             return;
         }
+        // SAFETY: We verify the body ID is valid and added before mutating its state.
         unsafe {
             let raw_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
@@ -283,6 +293,7 @@ impl PhysicsWorld {
             return;
         }
 
+        // SAFETY: physics_system, allocator, and job_system pointers are valid for the lifetime of PhysicsWorld.
         unsafe {
             self.physics_system.update(
                 delta_time,
@@ -313,6 +324,7 @@ impl PhysicsWorld {
             return;
         }
 
+        // SAFETY: The body ID is valid, and we check if it is added before removing and destroying it.
         unsafe {
             let raw_physics_system = self.physics_system.raw();
             let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_physics_system);
@@ -332,10 +344,13 @@ impl Default for PhysicsWorld {
 
 impl Drop for PhysicsWorld {
     fn drop(&mut self) {
+        // SAFETY: Drop ordering is critical. The `physics_system` MUST be dropped first,
+        // as Jolt internally references the job_system and temp_allocator during its shutdown.
         unsafe {
             ManuallyDrop::drop(&mut self.physics_system);
         }
 
+        // SAFETY: Now that the physics system is destroyed, it is safe to delete the allocator and job system.
         unsafe {
             JPC_JobSystemThreadPool_delete(self.job_system.as_ptr());
             JPC_TempAllocatorImpl_delete(self.temp_allocator.as_ptr());
@@ -357,6 +372,7 @@ fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
         ..Default::default()
     };
 
+    // SAFETY: FFI call to create a box shape with valid settings.
     unsafe {
         if JPC_BoxShapeSettings_Create(&settings, &mut shape, &mut err) {
             Some(shape)
@@ -371,9 +387,10 @@ fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
 }
 
 // SAFETY: The Jolt `PhysicsSystem` is designed for multi-threaded access.
-// Bevy's `ResMut` ensures we do not mutate the physics world from multiple
-// systems simultaneously, making it safe to implement `Send` and `Sync`.
+// The raw pointers (`temp_allocator`, `job_system`) are only accessed through 
+// `&mut self` methods (single-writer safe), and no aliased mutable pointers exist.
 unsafe impl Send for PhysicsWorld {}
+// SAFETY: PhysicsWorld uses single-writer mutation and has no aliased pointers, making it safe to share references.
 unsafe impl Sync for PhysicsWorld {}
 
 #[cfg(test)]
