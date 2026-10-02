@@ -6,6 +6,7 @@ use bevy::math::Vec3;
 use crate::world::PhysicsWorld;
 
 #[derive(Resource, Debug, Clone)]
+/// Gravity struct.
 pub struct Gravity(pub Vec3);
 
 impl Default for Gravity {
@@ -14,6 +15,7 @@ impl Default for Gravity {
     }
 }
 
+/// Apply Gravity.
 pub fn apply_gravity(mut world: ResMut<PhysicsWorld>, gravity: Res<Gravity>) {
     if gravity.is_changed() {
         world.set_gravity(gravity.0);

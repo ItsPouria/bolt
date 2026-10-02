@@ -6,6 +6,7 @@ use crate::systems::{apply_velocities, sync_transforms};
 use crate::world::PhysicsWorld;
 
 #[derive(Default, Debug)]
+/// Boltplugin struct.
 pub struct BoltPlugin {}
 
 impl Plugin for BoltPlugin {

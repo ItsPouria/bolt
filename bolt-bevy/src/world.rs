@@ -23,6 +23,7 @@ use crate::layers::{
 };
 
 static JOLT_INIT: Once = Once::new();
+/// Invalid Body Id constant.
 pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
 
 /// The core Bevy resource representing the Jolt physics world.
@@ -30,6 +31,7 @@ pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
 /// This struct owns the Jolt `PhysicsSystem` as well as the temporary allocator
 /// and job system required to step the simulation.
 #[derive(Resource)]
+/// Physicsworld struct.
 pub struct PhysicsWorld {
     physics_system: ManuallyDrop<PhysicsSystem>,
     temp_allocator: NonNull<JPC_TempAllocatorImpl>,
@@ -82,10 +84,12 @@ impl PhysicsWorld {
         }
     }
 
+    /// Physics System.
     pub fn physics_system(&self) -> &PhysicsSystem {
         &self.physics_system
     }
 
+    /// Spawn Box.
     pub fn spawn_box(
         &mut self,
         entity: Entity,
@@ -173,6 +177,7 @@ impl PhysicsWorld {
         Some(rolt::BodyId::new(body_id))
     }
 
+    /// Get Transform.
     pub fn get_transform(&self, body_id: rolt::BodyId) -> Option<(Vec3, Quat)> {
         if body_id.raw() == INVALID_BODY_ID {
             return None;
@@ -196,6 +201,7 @@ impl PhysicsWorld {
         }
     }
 
+    /// Get Linear Velocity.
     pub fn get_linear_velocity(&self, body_id: rolt::BodyId) -> Option<Vec3> {
         if body_id.raw() == INVALID_BODY_ID {
             return None;
@@ -216,6 +222,7 @@ impl PhysicsWorld {
         }
     }
 
+    /// Get Angular Velocity.
     pub fn get_angular_velocity(&self, body_id: rolt::BodyId) -> Option<Vec3> {
         if body_id.raw() == INVALID_BODY_ID {
             return None;
@@ -236,6 +243,7 @@ impl PhysicsWorld {
         }
     }
 
+    /// Set Linear Velocity.
     pub fn set_linear_velocity(&mut self, body_id: rolt::BodyId, linear_velocity: Vec3) {
         if body_id.raw() == INVALID_BODY_ID {
             return;
@@ -260,6 +268,7 @@ impl PhysicsWorld {
         }
     }
 
+    /// Set Angular Velocity.
     pub fn set_angular_velocity(&mut self, body_id: rolt::BodyId, angular_velocity: Vec3) {
         if body_id.raw() == INVALID_BODY_ID {
             return;
@@ -288,6 +297,7 @@ impl PhysicsWorld {
         }
     }
 
+    /// Step.
     pub fn step(&mut self, delta_time: f32, collision_steps: i32) {
         if delta_time <= 0.0 || delta_time.is_nan() {
             return;
@@ -304,6 +314,7 @@ impl PhysicsWorld {
         }
     }
 
+    /// Set Gravity.
     pub fn set_gravity(&mut self, gravity: Vec3) {
         // SAFETY: `physics_system.raw()` returns a valid pointer to the initialized
         // JPC_PhysicsSystem. The JPC_Vec3 struct is correctly initialized with padding.
@@ -319,6 +330,7 @@ impl PhysicsWorld {
         }
     }
 
+    /// Destroy Body.
     pub fn destroy_body(&mut self, body_id: rolt::BodyId) {
         if body_id.raw() == INVALID_BODY_ID {
             return;

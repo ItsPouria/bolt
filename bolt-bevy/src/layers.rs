@@ -6,12 +6,16 @@ use rolt::{
 
 /// Predefined object layers for Bolt.
 pub const OBJECT_LAYER_STATIC: ObjectLayer = ObjectLayer::new(0);
+/// Object Layer Dynamic constant.
 pub const OBJECT_LAYER_DYNAMIC: ObjectLayer = ObjectLayer::new(1);
+/// Num Object Layers constant.
 pub const NUM_OBJECT_LAYERS: u32 = 2;
 
 /// Broad phase spatial trees.
 pub const BROAD_PHASE_LAYER_STATIC: BroadPhaseLayer = BroadPhaseLayer::new(0);
+/// Broad Phase Layer Dynamic constant.
 pub const BROAD_PHASE_LAYER_DYNAMIC: BroadPhaseLayer = BroadPhaseLayer::new(1);
+/// Num Broad Phase Layers constant.
 pub const NUM_BROAD_PHASE_LAYERS: u32 = 2;
 
 /// Maps object layers to their broad phase acceleration tree.
