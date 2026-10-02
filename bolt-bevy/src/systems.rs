@@ -107,23 +107,22 @@ pub fn sync_transforms(
 
                 transform.translation = local_translation;
                 transform.rotation = local_rotation;
-                continue;
+            } else {
+                transform.translation = world_pos;
+                transform.rotation = world_rot;
             }
 
-            transform.translation = world_pos;
-            transform.rotation = world_rot;
-        }
+            if let (Some(mut velocity), Some(jolt_vel)) =
+                (lin_vel, physics_world.get_linear_velocity(body.0))
+            {
+                velocity.0 = jolt_vel;
+            }
 
-        if let (Some(mut velocity), Some(jolt_vel)) =
-            (lin_vel, physics_world.get_linear_velocity(body.0))
-        {
-            velocity.0 = jolt_vel;
-        }
-
-        if let (Some(mut velocity), Some(jolt_vel)) =
-            (ang_vel, physics_world.get_angular_velocity(body.0))
-        {
-            velocity.0 = jolt_vel;
+            if let (Some(mut velocity), Some(jolt_vel)) =
+                (ang_vel, physics_world.get_angular_velocity(body.0))
+            {
+                velocity.0 = jolt_vel;
+            }
         }
     }
 }
