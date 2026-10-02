@@ -4,6 +4,22 @@ use bevy::prelude::*;
 use crate::components::{AngularVelocity, JoltBody, LinearVelocity};
 use crate::prelude::{Collider, RigidBody};
 use crate::world::PhysicsWorld;
+use crate::config::PhysicsConfig;
+
+/// System sets for ordering physics execution.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PhysicsSet {
+    /// Spawns new bodies.
+    Spawn,
+    /// Applies velocity changes from ECS to Jolt.
+    ApplyVelocities,
+    /// Applies gravity forces.
+    ApplyGravity,
+    /// Steps the physics simulation.
+    Step,
+    /// Synchronizes transforms from Jolt back to ECS.
+    SyncTransforms,
+}
 
 /// System that queries newly added [`RigidBody`] entities and creates their corresponding
 /// Jolt physics bodies in the [`PhysicsWorld`].
@@ -169,6 +185,16 @@ pub fn apply_velocities(
             physics_world.set_angular_velocity(body.0, **vel);
         }
     }
+}
+
+/// Steps the internal physics simulation.
+pub fn step_physics(
+    mut world: ResMut<PhysicsWorld>,
+    config: Res<PhysicsConfig>,
+    time: Res<Time<Fixed>>,
+) {
+    let delta_time = time.delta_secs();
+    world.step(delta_time, config.collision_steps as i32);
 }
 
 #[cfg(test)]

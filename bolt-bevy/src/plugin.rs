@@ -7,28 +7,35 @@ use crate::world::PhysicsWorld;
 
 #[derive(Default, Debug)]
 /// Boltplugin struct.
-pub struct BoltPlugin {}
+pub struct BoltPlugin {
+    /// The configuration for the physics world.
+    pub config: PhysicsConfig,
+}
 
 impl Plugin for BoltPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PhysicsConfig>();
+        app.insert_resource(self.config.clone());
         app.init_resource::<PhysicsWorld>();
         app.init_resource::<Gravity>();
 
-        app.add_systems(Update, (crate::systems::spawn_physics_bodies,));
+        app.configure_sets(FixedUpdate, (
+            crate::systems::PhysicsSet::Spawn,
+            crate::systems::PhysicsSet::ApplyVelocities,
+            crate::systems::PhysicsSet::ApplyGravity,
+            crate::systems::PhysicsSet::Step,
+            crate::systems::PhysicsSet::SyncTransforms,
+        ).chain());
+
         app.add_systems(
             FixedUpdate,
-            (apply_velocities, apply_gravity, step_physics, sync_transforms).chain(),
+            (
+                crate::systems::spawn_physics_bodies.in_set(crate::systems::PhysicsSet::Spawn),
+                apply_velocities.in_set(crate::systems::PhysicsSet::ApplyVelocities),
+                apply_gravity.in_set(crate::systems::PhysicsSet::ApplyGravity),
+                crate::systems::step_physics.in_set(crate::systems::PhysicsSet::Step),
+                sync_transforms.in_set(crate::systems::PhysicsSet::SyncTransforms),
+            ),
         );
         app.add_observer(crate::systems::cleanup_despawned_physics_bodies);
     }
-}
-
-fn step_physics(
-    mut world: ResMut<PhysicsWorld>,
-    config: Res<PhysicsConfig>,
-    time: Res<Time<Fixed>>,
-) {
-    let delta_time = time.delta_secs();
-    world.step(delta_time, config.collision_steps as i32);
 }
