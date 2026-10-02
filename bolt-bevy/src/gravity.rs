@@ -1,11 +1,7 @@
-use bevy::ecs::change_detection::DetectChanges;
-use bevy::ecs::resource::Resource;
-use bevy::ecs::system::{Res, ResMut};
-use bevy::math::Vec3;
-
 use crate::world::PhysicsWorld;
+use bevy::prelude::*;
 
-#[derive(Resource, Debug, Clone)]
+#[derive(Resource, Debug, Clone, Deref, DerefMut)]
 /// Gravity struct.
 pub struct Gravity(pub Vec3);
 
