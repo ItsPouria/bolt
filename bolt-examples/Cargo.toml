@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 bolt-bevy = {path = "../bolt-bevy"}
-bevy = "0.19"
+bevy = { workspace = true }
 rand = "0.10.3"

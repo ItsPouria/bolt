@@ -2791,9 +2791,9 @@ dependencies = [
 
 [[package]]
 name = "glam"
-version = "0.33.3"
+version = "0.33.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7360bd2cd76e0cd9032d42cf2922155cecea2685b0cfa4630c3246df030bcfd6"
+checksum = "37bfe73dc8ec21f54d181e5a60554327ec3f1c600c455a75ccbfc65d2106a6c4"
 
 [[package]]
 name = "glob"
@@ -4538,7 +4538,7 @@ name = "rolt"
 version = "0.3.1+Jolt-5.0.0"
 source = "git+https://github.com/SecondHalfGames/jolt-rust?rev=72ac0cb1#72ac0cb1acc2037c72dc29865da6f52a5483dadc"
 dependencies = [
- "glam 0.33.3",
+ "glam 0.33.12",
  "joltc-sys",
  "paste",
 ]

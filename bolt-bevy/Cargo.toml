@@ -2,8 +2,14 @@
 name = "bolt-bevy"
 version = "0.1.0"
 edition = "2024"
+description = "A comprehensive Jolt Physics integration for the Bevy game engine."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/itspouria/bolt" 
+keywords = ["bevy", "physics", "jolt", "gamedev"]
+categories = ["game-development"]
+rust-version = "1.81"
 
 [dependencies]
-rolt = { git = "https://github.com/SecondHalfGames/jolt-rust", rev = "72ac0cb1" }
-bevy = "0.19"
-joltc-sys = { git = "https://github.com/SecondHalfGames/jolt-rust", rev = "72ac0cb1" }
+bevy = { workspace = true }
+rolt = { workspace = true }
+joltc-sys = { workspace = true }
