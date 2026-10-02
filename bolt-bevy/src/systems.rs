@@ -65,6 +65,10 @@ pub fn spawn_physics_bodies(
             commands.entity(entity).insert(JoltBody(id));
         } else {
             error!("Failed to spawn physics body for entity {:?}", entity);
+            commands
+                .entity(entity)
+                .remove::<RigidBody>()
+                .remove::<Collider>();
         }
     }
 }
