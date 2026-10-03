@@ -95,12 +95,12 @@ impl PhysicsWorld {
         &mut self,
         entity: Entity,
         half_extents: Vec3,
-        position: Vec3,
-        rotation: Quat,
+        transform: (Vec3, Quat),
         rigidbody: &RigidBody,
         linear_velocity: Vec3,
         angular_velocity: Vec3,
     ) -> Option<rolt::BodyId> {
+        let (position, rotation) = transform;
         let shape_ptr = create_box_shape(half_extents)?;
 
         let motion_type = match rigidbody {

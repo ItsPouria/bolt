@@ -69,8 +69,7 @@ pub fn spawn_physics_bodies(
             Collider::Box { half_extents } => physics_world.spawn_box(
                 entity,
                 *half_extents,
-                position,
-                rotation,
+                (position, rotation),
                 rigidbody,
                 lin_vel,
                 ang_vel,
