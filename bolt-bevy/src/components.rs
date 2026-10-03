@@ -5,6 +5,7 @@ use rolt::BodyId;
 #[non_exhaustive]
 #[derive(Component, Clone, Debug, Eq, PartialEq, Reflect)]
 #[reflect(Component)]
+#[require(Transform, LinearVelocity, AngularVelocity)]
 pub enum RigidBody {
     /// A dynamic body affected by forces, gravity, and impulses (e.g. crates, debris).
     Dynamic,
@@ -28,7 +29,8 @@ pub enum Collider {
 }
 
 /// A component attached to Bevy entities that have a live Jolt Physics body.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Component, Debug)]
+#[component(immutable)]
 pub struct JoltBody(pub(crate) BodyId);
 
 impl JoltBody {
