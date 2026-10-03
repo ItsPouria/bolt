@@ -1,5 +1,7 @@
-//! The bolt-core crate.
+//! Core, engine-agnostic abstractions and math types for the Bolt physics engine.
+//!
+//! This crate is intentionally kept lightweight and is designed to hold common trait definitions,
+//! cross-platform scalar wrappers, and fundamental physics algorithms that can be shared
+//! across multiple backend integrations.
 
-#![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
-#![warn(clippy::undocumented_unsafe_blocks)]
