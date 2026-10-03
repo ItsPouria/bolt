@@ -110,7 +110,6 @@ fn test_despawn_cleans_up_physics_body() {
     let jolt_body = app
         .world()
         .get::<bolt_bevy::prelude::JoltBody>(entity)
-        .copied()
         .expect("JoltBody was not attached to entity!");
     let body_id = jolt_body.id();
 
@@ -166,7 +165,6 @@ fn test_child_entity_spawns_at_world_coordinates() {
     let jolt_body = app
         .world()
         .get::<bolt_bevy::prelude::JoltBody>(child)
-        .copied()
         .expect("JoltBody component missing on child");
 
     let physics_world = app.world().resource::<bolt_bevy::prelude::PhysicsWorld>();
