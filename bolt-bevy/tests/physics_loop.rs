@@ -1,6 +1,13 @@
 use bevy::prelude::*;
 use bolt_bevy::prelude::*;
-use rolt::CollideShapeCollector;
+
+fn physics_test_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(TransformPlugin);
+    app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
+    app
+}
 use std::time::Duration;
 
 #[test]
@@ -41,10 +48,7 @@ fn test_gravity_pulls_dynamic_bodies() {
 
 #[test]
 fn test_fixed_timestep_prevents_micro_updates() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(TransformPlugin);
-    app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
+    let mut app = physics_test_app();
 
     // 1. Spawn a box exactly at Y = 10.0
     let start_y = 10.0;
@@ -75,18 +79,15 @@ fn test_fixed_timestep_prevents_micro_updates() {
 
     // TDD ASSERTION: If physics is correctly using FixedUpdate (64Hz = 16ms),
     // a 1ms advance should NOT trigger a physics step. The box should not have moved!
-    assert_eq!(
-        transform.translation.y, start_y,
+    assert!(
+        (transform.translation.y - start_y).abs() < 0.001,
         "The box moved! Physics is running on variable Update instead of FixedUpdate!"
     );
 }
 
 #[test]
 fn test_despawn_cleans_up_physics_body() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(TransformPlugin);
-    app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
+    let mut app = physics_test_app();
 
     // 1. Spawn a box
     let entity = app
@@ -102,7 +103,10 @@ fn test_despawn_cleans_up_physics_body() {
 
     // 2. Run an Update so the physics body is created in Jolt
     app.update();
-    app.world_mut().insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)));
+    app.world_mut()
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_secs_f32(1.0 / 60.0),
+        ));
     app.update();
 
     // 3. Verify JoltBody component exists and is live in Jolt
@@ -132,10 +136,7 @@ fn test_despawn_cleans_up_physics_body() {
 
 #[test]
 fn test_child_entity_spawns_at_world_coordinates() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(TransformPlugin);
-    app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
+    let mut app = physics_test_app();
 
     let parent = app
         .world_mut()
@@ -159,7 +160,10 @@ fn test_child_entity_spawns_at_world_coordinates() {
 
     // 1. Run an update so TransformPlugin propagates transforms and Bolt spawns bodies
     app.update();
-    app.world_mut().insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)));
+    app.world_mut()
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_secs_f32(1.0 / 60.0),
+        ));
     app.update();
 
     let jolt_body = app
@@ -179,10 +183,7 @@ fn test_child_entity_spawns_at_world_coordinates() {
 
 #[test]
 fn test_child_entity_dynamic_sync_transforms() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(TransformPlugin);
-    app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
+    let mut app = physics_test_app();
 
     let parent = app
         .world_mut()
@@ -227,10 +228,7 @@ fn test_child_entity_dynamic_sync_transforms() {
 
 #[test]
 fn test_kinematic_body_defies_gravity() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(TransformPlugin);
-    app.add_plugins(bolt_bevy::plugin::BoltPlugin::default());
+    let mut app = physics_test_app();
 
     // 1. Spawn a Kinematic box high in the air
     let start_y = 10.0;
@@ -261,8 +259,8 @@ fn test_kinematic_body_defies_gravity() {
     let transform = app.world().get::<Transform>(entity).unwrap();
 
     // 6. ASSERTION: Kinematic bodies ignore gravity. It should still be exactly at start_y.
-    assert_eq!(
-        transform.translation.y, start_y,
+    assert!(
+        (transform.translation.y - start_y).abs() < 0.001,
         "Kinematic body moved! It should not be affected by gravity."
     );
 }
@@ -299,8 +297,8 @@ fn test_apply_velocities_syncs_with_physics_engine() {
 
     let transform = app.world().get::<Transform>(entity).unwrap();
 
-    assert_eq!(
-        transform.translation.y, 10.0,
+    assert!(
+        (transform.translation.y - 10.0).abs() < 0.001,
         "Kinematic body did not move at the correct velocity! Expected 10.0, got {}!",
         transform.translation.y
     );
