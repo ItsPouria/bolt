@@ -90,6 +90,14 @@ impl PhysicsWorld {
         &self.physics_system
     }
 
+    /// Helper to get the Jolt BodyInterface.
+    ///
+    /// # Safety
+    /// The caller must ensure that the `PhysicsSystem` is still valid.
+    unsafe fn body_interface(&self) -> *mut joltc_sys::JPC_BodyInterface {
+        unsafe { joltc_sys::JPC_PhysicsSystem_GetBodyInterface(self.physics_system.raw()) }
+    }
+
     /// Spawn Box.
     pub fn spawn_box(
         &mut self,
@@ -156,8 +164,7 @@ impl PhysicsWorld {
 
         // SAFETY: settings and shape_ptr are valid, and motion types match Jolt requirements.
         let body_id = unsafe {
-            let raw_physics_system = self.physics_system.raw();
-            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_physics_system);
+            let body_interface = self.body_interface();
 
             let id = joltc_sys::JPC_BodyInterface_CreateAndAddBody(
                 body_interface,
@@ -185,8 +192,7 @@ impl PhysicsWorld {
         }
         // SAFETY: We verify the body ID is valid and added before querying its state.
         unsafe {
-            let raw_system = self.physics_system.raw();
-            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+            let body_interface = self.body_interface();
 
             if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
                 return None;
@@ -209,8 +215,7 @@ impl PhysicsWorld {
         }
         // SAFETY: We verify the body ID is valid and added before querying its state.
         unsafe {
-            let raw_system = self.physics_system.raw();
-            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+            let body_interface = self.body_interface();
 
             if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
                 return None;
@@ -230,8 +235,7 @@ impl PhysicsWorld {
         }
         // SAFETY: We verify the body ID is valid and added before querying its state.
         unsafe {
-            let raw_system = self.physics_system.raw();
-            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+            let body_interface = self.body_interface();
 
             if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
                 return None;
@@ -251,8 +255,7 @@ impl PhysicsWorld {
         }
         // SAFETY: We verify the body ID is valid and added before mutating its state.
         unsafe {
-            let raw_system = self.physics_system.raw();
-            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+            let body_interface = self.body_interface();
 
             if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
                 return;
@@ -276,8 +279,7 @@ impl PhysicsWorld {
         }
         // SAFETY: We verify the body ID is valid and added before mutating its state.
         unsafe {
-            let raw_system = self.physics_system.raw();
-            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_system);
+            let body_interface = self.body_interface();
 
             if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
                 return;
@@ -339,8 +341,7 @@ impl PhysicsWorld {
 
         // SAFETY: The body ID is valid, and we check if it is added before removing and destroying it.
         unsafe {
-            let raw_physics_system = self.physics_system.raw();
-            let body_interface = joltc_sys::JPC_PhysicsSystem_GetBodyInterface(raw_physics_system);
+            let body_interface = self.body_interface();
             if joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
                 joltc_sys::JPC_BodyInterface_RemoveBody(body_interface, body_id.raw());
             }
