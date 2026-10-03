@@ -109,7 +109,9 @@ impl PhysicsWorld {
         angular_velocity: Vec3,
     ) -> Option<rolt::BodyId> {
         let (position, rotation) = transform;
+        println!("Trying to create box shape");
         let shape_ptr = create_box_shape(half_extents)?;
+        println!("Shape created: {:?}", shape_ptr);
 
         let motion_type = match rigidbody {
             RigidBody::Dynamic => joltc_sys::JPC_MOTION_TYPE_DYNAMIC,
@@ -163,6 +165,7 @@ impl PhysicsWorld {
         };
 
         // SAFETY: settings and shape_ptr are valid, and motion types match Jolt requirements.
+        println!("Settings: Pos({},{},{}) Rot({},{},{},{})", settings.Position.x, settings.Position.y, settings.Position.z, settings.Rotation.x, settings.Rotation.y, settings.Rotation.z, settings.Rotation.w);
         let body_id = unsafe {
             let body_interface = self.body_interface();
 
@@ -174,6 +177,7 @@ impl PhysicsWorld {
 
             joltc_sys::JPC_Shape_Release(shape_ptr);
 
+            println!("Body ID: {:?}", id);
             id
         };
 
@@ -392,11 +396,10 @@ fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
         if JPC_BoxShapeSettings_Create(&settings, &mut shape, &mut err) {
             Some(shape)
         } else {
-            // If creation fails, free the C++ error string allocated by Jolt
-            if !err.is_null() {
-                joltc_sys::JPC_String_delete(err);
-            }
-            None
+        let err_str = std::ffi::CStr::from_ptr(joltc_sys::JPC_String_c_str(err));
+        error!("Failed to create box shape: {:?}", err_str);
+        joltc_sys::JPC_String_delete(err);
+        None
         }
     }
 }
@@ -414,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_physics_system_getter() {
-        let physics_world = PhysicsWorld::default();
+        let physics_world = PhysicsWorld::new(PhysicsConfig::default());
         let system = physics_world.physics_system();
 
         // Assert that the raw C++ pointer inside the system successfully initialized
@@ -426,15 +429,14 @@ mod tests {
 
     #[test]
     fn test_spawn_static_box() {
-        let mut physics_world = PhysicsWorld::default();
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
         let rigidbody = RigidBody::Static;
         let box_size = Vec3::splat(1.0);
 
         let result = physics_world.spawn_box(
             Entity::PLACEHOLDER,
             box_size,
-            Vec3::ZERO,
-            Quat::IDENTITY,
+            (Vec3::ZERO, Quat::IDENTITY),
             &rigidbody,
             Vec3::ZERO,
             Vec3::ZERO,
@@ -445,15 +447,14 @@ mod tests {
 
     #[test]
     fn test_spawn_kinematic_box() {
-        let mut physics_world = PhysicsWorld::default();
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
         let rigidbody = RigidBody::Kinematic;
         let box_size = Vec3::splat(1.0);
 
         let result = physics_world.spawn_box(
             Entity::PLACEHOLDER,
             box_size,
-            Vec3::ZERO,
-            Quat::IDENTITY,
+            (Vec3::ZERO, Quat::IDENTITY),
             &rigidbody,
             Vec3::ZERO,
             Vec3::ZERO,
@@ -464,15 +465,14 @@ mod tests {
 
     #[test]
     fn test_create_box_shape_failure() {
-        let mut physics_world = PhysicsWorld::default();
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
         let rigidbody = RigidBody::Static;
         let box_size = Vec3::splat(-1.0);
 
         let result = physics_world.spawn_box(
             Entity::PLACEHOLDER,
             box_size,
-            Vec3::ZERO,
-            Quat::IDENTITY,
+            (Vec3::ZERO, Quat::IDENTITY),
             &rigidbody,
             Vec3::ZERO,
             Vec3::ZERO,
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn test_get_transform_invalid_and_destroyed_body() {
-        let mut physics_world = PhysicsWorld::default();
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
 
         // 1. Querying an invalid body ID returns None
         let invalid_id = rolt::BodyId::new(INVALID_BODY_ID);
@@ -498,8 +498,7 @@ mod tests {
             .spawn_box(
                 Entity::PLACEHOLDER,
                 Vec3::splat(1.0),
-                Vec3::new(1.0, 2.0, 3.0),
-                Quat::IDENTITY,
+                (Vec3::new(1.0, 2.0, 3.0), Quat::IDENTITY),
                 &RigidBody::Dynamic,
                 Vec3::ZERO,
                 Vec3::ZERO,
@@ -514,15 +513,14 @@ mod tests {
 
     #[test]
     fn test_spawn_box_stores_entity_user_data() {
-        let mut physics_world = PhysicsWorld::default();
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
         let test_entity = Entity::from_raw_u32(42).unwrap();
 
         let body_id = physics_world
             .spawn_box(
                 test_entity,
                 Vec3::splat(1.0),
-                Vec3::ZERO,
-                Quat::IDENTITY,
+                (Vec3::ZERO, Quat::IDENTITY),
                 &RigidBody::Dynamic,
                 Vec3::ZERO,
                 Vec3::ZERO,
@@ -538,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_step_handles_invalid_delta_time() {
-        let mut physics_world = PhysicsWorld::default();
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
 
         // Calling step with 0.0, negative dt, or NaN should safely return without panic
         physics_world.step(0.0, 1);
@@ -548,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_velocity_getters_and_setters() {
-        let mut physics_world = PhysicsWorld::default();
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
         let rigidbody = RigidBody::Dynamic;
         let box_size = Vec3::splat(1.0);
 
@@ -556,8 +554,7 @@ mod tests {
             .spawn_box(
                 Entity::PLACEHOLDER,
                 box_size,
-                Vec3::ZERO,
-                Quat::IDENTITY,
+                (Vec3::ZERO, Quat::IDENTITY),
                 &rigidbody,
                 Vec3::ZERO,
                 Vec3::ZERO,
