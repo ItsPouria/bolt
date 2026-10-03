@@ -34,10 +34,10 @@ fn update_stats(
     mut text_query: Query<&mut Text, With<StatsText>>,
 ) {
     let mut fps = 0.0;
-    if let Some(fps_diag) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
-        if let Some(value) = fps_diag.smoothed() {
-            fps = value;
-        }
+    if let Some(fps_diag) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS)
+        && let Some(value) = fps_diag.smoothed()
+    {
+        fps = value;
     }
 
     let body_count = body_query.iter().count();

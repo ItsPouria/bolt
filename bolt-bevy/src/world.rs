@@ -95,6 +95,7 @@ impl PhysicsWorld {
     /// # Safety
     /// The caller must ensure that the `PhysicsSystem` is still valid.
     unsafe fn body_interface(&self) -> *mut joltc_sys::JPC_BodyInterface {
+        // SAFETY: The raw pointer from `physics_system` is valid.
         unsafe { joltc_sys::JPC_PhysicsSystem_GetBodyInterface(self.physics_system.raw()) }
     }
 
@@ -109,9 +110,7 @@ impl PhysicsWorld {
         angular_velocity: Vec3,
     ) -> Option<rolt::BodyId> {
         let (position, rotation) = transform;
-        println!("Trying to create box shape");
         let shape_ptr = create_box_shape(half_extents)?;
-        println!("Shape created: {:?}", shape_ptr);
 
         let motion_type = match rigidbody {
             RigidBody::Dynamic => joltc_sys::JPC_MOTION_TYPE_DYNAMIC,
@@ -165,7 +164,6 @@ impl PhysicsWorld {
         };
 
         // SAFETY: settings and shape_ptr are valid, and motion types match Jolt requirements.
-        println!("Settings: Pos({},{},{}) Rot({},{},{},{})", settings.Position.x, settings.Position.y, settings.Position.z, settings.Rotation.x, settings.Rotation.y, settings.Rotation.z, settings.Rotation.w);
         let body_id = unsafe {
             let body_interface = self.body_interface();
 
@@ -177,7 +175,6 @@ impl PhysicsWorld {
 
             joltc_sys::JPC_Shape_Release(shape_ptr);
 
-            println!("Body ID: {:?}", id);
             id
         };
 
