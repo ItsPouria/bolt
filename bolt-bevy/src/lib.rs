@@ -8,7 +8,9 @@ pub mod layers;
 pub mod prelude;
 /// The `world` module.
 pub mod world;
+/// Raw FFI bindings to the Jolt C API.
 pub use joltc_sys;
+/// Safe Rust wrappers for Jolt types.
 pub use rolt;
 /// The `components` module.
 pub mod components;

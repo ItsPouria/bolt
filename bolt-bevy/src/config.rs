@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
-#[derive(Resource, Debug, Clone)]
+#[derive(Resource, Debug, Clone, Reflect)]
+#[reflect(Resource)]
 /// Physicsconfig struct.
 pub struct PhysicsConfig {
     /// The maximum number of physics objects allowed in the world.

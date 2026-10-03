@@ -3,7 +3,8 @@ use rolt::BodyId;
 
 /// Defines the motion type and physical behavior of a body.
 #[non_exhaustive]
-#[derive(Component, Clone, Debug, Eq, PartialEq)]
+#[derive(Component, Clone, Debug, Eq, PartialEq, Reflect)]
+#[reflect(Component)]
 pub enum RigidBody {
     /// A dynamic body affected by forces, gravity, and impulses (e.g. crates, debris).
     Dynamic,
@@ -16,7 +17,8 @@ pub enum RigidBody {
 
 /// The geometric collision shape attached to a rigid body.
 #[non_exhaustive]
-#[derive(Component, Clone, Debug, PartialEq)]
+#[derive(Component, Clone, Debug, PartialEq, Reflect)]
+#[reflect(Component)]
 pub enum Collider {
     /// A 3D box defined by its half-extents from the center.
     Box {
@@ -39,11 +41,13 @@ impl JoltBody {
 /// The linear velocity of a rigid body in meters per second.
 ///
 /// Modifying this component will update the body's velocity in the physics engine.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
+#[reflect(Component)]
 pub struct LinearVelocity(pub Vec3);
 
 /// The angular velocity of a rigid body in radians per second around the local X, Y, and Z axes.
 ///
 /// Modifying this component will update the body's angular velocity in the physics engine.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
+#[reflect(Component)]
 pub struct AngularVelocity(pub Vec3);
