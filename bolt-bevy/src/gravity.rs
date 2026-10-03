@@ -2,7 +2,7 @@ use crate::world::PhysicsWorld;
 use bevy::prelude::*;
 
 #[derive(Resource, Debug, Clone, Deref, DerefMut)]
-/// Gravity struct.
+/// Resource that defines the global gravity vector applied to all dynamic bodies.
 pub struct Gravity(pub Vec3);
 
 impl Default for Gravity {
@@ -11,7 +11,7 @@ impl Default for Gravity {
     }
 }
 
-/// Apply Gravity.
+/// System that applies the global gravity vector to all dynamic bodies each tick.
 pub fn apply_gravity(mut world: ResMut<PhysicsWorld>, gravity: Res<Gravity>) {
     if gravity.is_changed() {
         world.set_gravity(gravity.0);
