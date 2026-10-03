@@ -2,25 +2,25 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 #![warn(clippy::undocumented_unsafe_blocks)]
-/// The `layers` module.
+/// Collision layers
 pub mod layers;
-/// The `prelude` module.
+/// Re-exports of common items
 pub mod prelude;
-/// The `world` module.
+/// Core physics world and simulation
 pub mod world;
 /// Raw FFI bindings to the Jolt C API.
 pub use joltc_sys;
 /// Safe Rust wrappers for Jolt types.
 pub use rolt;
-/// The `components` module.
+/// Bevy components for physics bodies and shapes
 pub mod components;
-/// The `config` module.
+/// Configuration resources for the physics engine
 pub mod config;
-/// The `gravity` module.
+/// Gravity resources and systems
 pub mod gravity;
-/// The `plugin` module.
+/// Main Bevy plugin for the physics engine
 pub mod plugin;
-/// The `systems` module.
+/// Internal physics simulation systems
 pub mod systems;
 
 #[cfg(test)]
