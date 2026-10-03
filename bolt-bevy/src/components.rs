@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use rolt::BodyId;
 
 /// Defines the motion type and physical behavior of a body.
-#[derive(Component, Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(Component, Clone, Debug, Eq, PartialEq)]
 pub enum RigidBody {
     /// A dynamic body affected by forces, gravity, and impulses (e.g. crates, debris).
     Dynamic,
@@ -14,6 +15,7 @@ pub enum RigidBody {
 }
 
 /// The geometric collision shape attached to a rigid body.
+#[non_exhaustive]
 #[derive(Component, Clone, Debug, PartialEq)]
 pub enum Collider {
     /// A 3D box defined by its half-extents from the center.
@@ -25,16 +27,23 @@ pub enum Collider {
 
 /// A component attached to Bevy entities that have a live Jolt Physics body.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct JoltBody(pub BodyId);
+pub struct JoltBody(pub(crate) BodyId);
+
+impl JoltBody {
+    /// Returns the internal Jolt `BodyId` for this entity.
+    pub fn id(&self) -> BodyId {
+        self.0
+    }
+}
 
 /// The linear velocity of a rigid body in meters per second.
-/// 
+///
 /// Modifying this component will update the body's velocity in the physics engine.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut)]
 pub struct LinearVelocity(pub Vec3);
 
 /// The angular velocity of a rigid body in radians per second around the local X, Y, and Z axes.
-/// 
+///
 /// Modifying this component will update the body's angular velocity in the physics engine.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut)]
 pub struct AngularVelocity(pub Vec3);
