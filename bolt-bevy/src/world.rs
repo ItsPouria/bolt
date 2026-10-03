@@ -6,6 +6,7 @@ use std::{mem::ManuallyDrop, ptr};
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::resource::Resource;
+use bevy::ecs::world::{FromWorld, World};
 use bevy::log::error;
 use bevy::math::{Quat, Vec3};
 use joltc_sys::{
@@ -63,7 +64,7 @@ impl PhysicsWorld {
         );
 
         // SAFETY: 10MB is a valid size for the Jolt temp allocator.
-        let temp_allocator_ptr = unsafe { JPC_TempAllocatorImpl_new(10 * 1024 * 1024) }; // 10 MB
+        let temp_allocator_ptr = unsafe { JPC_TempAllocatorImpl_new(config.temp_allocator_size_mb * 1024 * 1024) }; // 10 MB
         let temp_allocator = NonNull::new(temp_allocator_ptr)
             .expect("Failed to allocate Jolt TempAllocator: Out of memory");
         // SAFETY: Thread counts and max jobs constants are valid parameters for Jolt.
@@ -71,8 +72,8 @@ impl PhysicsWorld {
             JPC_JobSystemThreadPool_new3(
                 JPC_MAX_PHYSICS_JOBS as u32,
                 JPC_MAX_PHYSICS_BARRIERS as u32,
-                config.num_threads, // num_threads
-            )
+                config.num_threads as i32,
+                )
         };
         let job_system =
             NonNull::new(job_system_ptr).expect("Failed to allocate Jolt JobSystem: Out of memory");
@@ -348,9 +349,10 @@ impl PhysicsWorld {
     }
 }
 
-impl Default for PhysicsWorld {
-    fn default() -> Self {
-        Self::new(PhysicsConfig::default())
+impl FromWorld for PhysicsWorld {
+    fn from_world(world: &mut World) -> Self {
+       let config = world.get_resource::<PhysicsConfig>().cloned().unwrap_or_default();
+       Self::new(config)
     }
 }
 
