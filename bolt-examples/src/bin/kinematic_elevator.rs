@@ -53,10 +53,14 @@ fn setup(
         Mesh3d(meshes.add(Cuboid::from_size(elevator_size))),
         MeshMaterial3d(materials.add(Color::srgb(0.2, 0.2, 0.8))),
         Transform::from_xyz(0.0, 0.0, 0.0),
+        // bolt-bevy concept: Kinematic bodies are completely immune to gravity
+        // and external forces. They are driven by code, but they can still push
+        // Dynamic bodies around!
         RigidBody::Kinematic,
         Collider::Box {
             half_extents: elevator_size / 2.0,
         },
+        // We set the initial velocity here. Bolt will sync this with the physics engine.
         LinearVelocity(Vec3::new(0.0, 2.0, 0.0)),
         Elevator,
     ));
@@ -74,11 +78,16 @@ fn setup(
     ));
 }
 
+// This system controls the elevator logic.
+// In Bolt, to move a Kinematic body, you simply mutate its LinearVelocity component.
+// Bolt automatically detects the change and syncs it with the Jolt Physics engine!
 fn move_elevator(mut query: Query<(&mut LinearVelocity, &Transform), With<Elevator>>) {
     for (mut velocity, transform) in query.iter_mut() {
         if transform.translation.y > 5.0 {
+            // Reversing the velocity pushes the elevator back down
             velocity.y = -2.0;
         } else if transform.translation.y < 0.0 {
+            // Reversing the velocity pushes the elevator back up
             velocity.y = 2.0;
         }
     }
