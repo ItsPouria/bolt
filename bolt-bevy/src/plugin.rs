@@ -41,5 +41,7 @@ impl Plugin for BoltPlugin {
             ),
         );
         app.add_observer(crate::systems::cleanup_despawned_physics_bodies);
+        app.add_observer(crate::systems::remove_jolt_body_on_rigidbody_removal);
+        app.add_observer(crate::systems::remove_jolt_body_on_collider_removal);
     }
 }
