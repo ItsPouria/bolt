@@ -12,10 +12,7 @@ use std::time::Duration;
 
 #[test]
 fn test_gravity_pulls_dynamic_bodies() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(TransformPlugin);
-    app.add_plugins(BoltPlugin::default());
+    let mut app = physics_test_app();
 
     let entity = app
         .world_mut()
@@ -267,10 +264,7 @@ fn test_kinematic_body_defies_gravity() {
 
 #[test]
 fn test_apply_velocities_syncs_with_physics_engine() {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(TransformPlugin);
-    app.add_plugins(BoltPlugin::default());
+    let mut app = physics_test_app();
 
     let entity = app
         .world_mut()
