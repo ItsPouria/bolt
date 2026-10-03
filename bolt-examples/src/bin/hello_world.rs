@@ -61,7 +61,6 @@ fn setup(
     ));
 }
 
-
 fn spawn_random_boxes(
     mut commands: Commands,
     time: Res<Time>,
@@ -74,13 +73,13 @@ fn spawn_random_boxes(
         let x = (rand::random::<f32>() - 0.5) * 8.0; // -4.0 to 4.0
         let z = (rand::random::<f32>() - 0.5) * 8.0; // -4.0 to 4.0
         let y = rand::random::<f32>() * 5.0 + 5.0; // 5.0 to 10.0
-        
+
         let r = rand::random::<f32>();
         let g = rand::random::<f32>();
         let b = rand::random::<f32>();
-        
+
         let box_size = Vec3::splat(1.0);
-        
+
         commands.spawn((
             Mesh3d(meshes.add(Cuboid::from_size(box_size))),
             MeshMaterial3d(materials.add(Color::srgb(r, g, b))),
