@@ -24,7 +24,7 @@ use crate::layers::{
 };
 
 static JOLT_INIT: Once = Once::new();
-/// Invalid Body Id constant.
+/// Constant representing an invalid or unallocated Jolt body ID (0xFFFFFFFF).
 pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
 
 /// The core Bevy resource representing the Jolt physics world.
@@ -32,18 +32,18 @@ pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
 /// This struct owns the Jolt `PhysicsSystem` as well as the temporary allocator
 /// and job system required to step the simulation.
 #[derive(Resource)]
-/// Physicsworld struct.
 pub struct PhysicsWorld {
     physics_system: ManuallyDrop<PhysicsSystem>,
     temp_allocator: NonNull<JPC_TempAllocatorImpl>,
     job_system: NonNull<JPC_JobSystemThreadPool>,
+    body_registry: std::collections::HashMap<rolt::BodyId, Entity>,
 }
 
 impl PhysicsWorld {
     /// Creates a new physics world with default settings.
     pub fn new(config: PhysicsConfig) -> Self {
         // Initialize the Jolt core. This is required before any Jolt objects can be created.
-        JOLT_INIT.call_once(|| 
+        JOLT_INIT.call_once(||
         // SAFETY: Initializing the Jolt C-API is safe to call exactly once globally.
         unsafe {
             JPC_RegisterDefaultAllocator();
@@ -64,7 +64,8 @@ impl PhysicsWorld {
         );
 
         // SAFETY: 10MB is a valid size for the Jolt temp allocator.
-        let temp_allocator_ptr = unsafe { JPC_TempAllocatorImpl_new(config.temp_allocator_size_mb * 1024 * 1024) }; // 10 MB
+        let temp_allocator_ptr =
+            unsafe { JPC_TempAllocatorImpl_new(config.temp_allocator_size_mb * 1024 * 1024) }; // 10 MB
         let temp_allocator = NonNull::new(temp_allocator_ptr)
             .expect("Failed to allocate Jolt TempAllocator: Out of memory");
         // SAFETY: Thread counts and max jobs constants are valid parameters for Jolt.
@@ -72,8 +73,8 @@ impl PhysicsWorld {
             JPC_JobSystemThreadPool_new3(
                 JPC_MAX_PHYSICS_JOBS as u32,
                 JPC_MAX_PHYSICS_BARRIERS as u32,
-                config.num_threads as i32,
-                )
+                config.num_threads,
+            )
         };
         let job_system =
             NonNull::new(job_system_ptr).expect("Failed to allocate Jolt JobSystem: Out of memory");
@@ -82,6 +83,7 @@ impl PhysicsWorld {
             physics_system: ManuallyDrop::new(physics_system),
             temp_allocator,
             job_system,
+            body_registry: std::collections::HashMap::new(),
         }
     }
 
@@ -99,7 +101,7 @@ impl PhysicsWorld {
         unsafe { joltc_sys::JPC_PhysicsSystem_GetBodyInterface(self.physics_system.raw()) }
     }
 
-    /// Spawn Box.
+    /// Spawns a box shape into the Jolt physics world and returns its ID.
     pub fn spawn_box(
         &mut self,
         entity: Entity,
@@ -183,10 +185,27 @@ impl PhysicsWorld {
             error!("Failed to create Jolt body: body limit reached or invalid settings");
             return None;
         }
-        Some(rolt::BodyId::new(body_id))
+        let id = rolt::BodyId::new(body_id);
+        self.body_registry.insert(id, entity);
+        Some(id)
     }
 
-    /// Get Transform.
+    /// Returns whether the specified body is active (awake) in the Jolt physics engine.
+    pub fn is_active(&self, body_id: rolt::BodyId) -> bool {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+            return false;
+        }
+        // SAFETY: The body ID is registered in body_registry and confirmed added before querying.
+        unsafe {
+            let body_interface = self.body_interface();
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return false;
+            }
+            joltc_sys::JPC_BodyInterface_IsActive(body_interface, body_id.raw())
+        }
+    }
+
+    /// Retrieves the current position and rotation of the body from Jolt.
     pub fn get_transform(&self, body_id: rolt::BodyId) -> Option<(Vec3, Quat)> {
         if body_id.raw() == INVALID_BODY_ID {
             return None;
@@ -301,9 +320,9 @@ impl PhysicsWorld {
         }
     }
 
-    /// Step.
+    /// Advances the physics simulation by `delta_time`, performing `collision_steps` substeps.
     pub fn step(&mut self, delta_time: f32, collision_steps: i32) {
-        if delta_time <= 0.0 || delta_time.is_nan() {
+        if delta_time <= 0.0 || !delta_time.is_finite() {
             return;
         }
 
@@ -334,13 +353,18 @@ impl PhysicsWorld {
         }
     }
 
-    /// Destroy Body.
-    pub fn destroy_body(&mut self, body_id: rolt::BodyId) {
+    /// Destroys a body in Jolt if it is registered to this PhysicsWorld.
+    pub fn destroy_body(&mut self, body_id: rolt::BodyId) -> bool {
         if body_id.raw() == INVALID_BODY_ID {
-            return;
+            return false;
         }
 
-        // SAFETY: The body ID is valid, and we check if it is added before removing and destroying it.
+        if self.body_registry.remove(&body_id).is_none() {
+            return false;
+        }
+
+        // SAFETY: The body ID is valid because we only destroy it if it exists in our body_registry,
+        // which guarantees it was allocated by this PhysicsWorld and has not yet been destroyed.
         unsafe {
             let body_interface = self.body_interface();
             if joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
@@ -348,13 +372,17 @@ impl PhysicsWorld {
             }
             joltc_sys::JPC_BodyInterface_DestroyBody(body_interface, body_id.raw());
         }
+        true
     }
 }
 
 impl FromWorld for PhysicsWorld {
     fn from_world(world: &mut World) -> Self {
-       let config = world.get_resource::<PhysicsConfig>().cloned().unwrap_or_default();
-       Self::new(config)
+        let config = world
+            .get_resource::<PhysicsConfig>()
+            .cloned()
+            .unwrap_or_default();
+        Self::new(config)
     }
 }
 
@@ -393,19 +421,21 @@ fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
         if JPC_BoxShapeSettings_Create(&settings, &mut shape, &mut err) {
             Some(shape)
         } else {
-        let err_str = std::ffi::CStr::from_ptr(joltc_sys::JPC_String_c_str(err));
-        error!("Failed to create box shape: {:?}", err_str);
-        joltc_sys::JPC_String_delete(err);
-        None
+            let err_str = std::ffi::CStr::from_ptr(joltc_sys::JPC_String_c_str(err));
+            error!("Failed to create box shape: {:?}", err_str);
+            joltc_sys::JPC_String_delete(err);
+            None
         }
     }
 }
 
 // SAFETY: The Jolt `PhysicsSystem` is designed for multi-threaded access.
-// The raw pointers (`temp_allocator`, `job_system`) are only accessed through 
-// `&mut self` methods (single-writer safe), and no aliased mutable pointers exist.
+// SAFETY: The Jolt `PhysicsSystem` and `BodyInterface` are internally synchronized
+// via mutexes (num_body_mutexes). We enforce that `PhysicsWorld` only exposes
+// Jolt state mutation through `&mut self` (exclusive access), ensuring no
+// data races can occur from the Rust side.
 unsafe impl Send for PhysicsWorld {}
-// SAFETY: PhysicsWorld uses single-writer mutation and has no aliased pointers, making it safe to share references.
+// SAFETY: See Send justification. Jolt's C++ locks make `&self` reads safe across threads.
 unsafe impl Sync for PhysicsWorld {}
 
 #[cfg(test)]
@@ -572,5 +602,31 @@ mod tests {
             physics_world.get_angular_velocity(body_id).unwrap(),
             target_ang_vel
         );
+    }
+
+    #[test]
+    fn test_is_active_lifecycle() {
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
+
+        // 1. Invalid and unallocated IDs return false
+        assert!(!physics_world.is_active(rolt::BodyId::new(INVALID_BODY_ID)));
+        assert!(!physics_world.is_active(rolt::BodyId::new(9999)));
+
+        // 2. Newly spawned dynamic box is active
+        let body_id = physics_world
+            .spawn_box(
+                Entity::PLACEHOLDER,
+                Vec3::splat(1.0),
+                (Vec3::ZERO, Quat::IDENTITY),
+                &RigidBody::Dynamic,
+                Vec3::ZERO,
+                Vec3::ZERO,
+            )
+            .expect("Failed to spawn box");
+        assert!(physics_world.is_active(body_id));
+
+        // 3. Destroyed body returns false
+        physics_world.destroy_body(body_id);
+        assert!(!physics_world.is_active(body_id));
     }
 }
