@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["bolt-bevy","bolt-core", "bolt-examples"]
+members = ["bolt-core", "bolt-bevy", "bolt-examples"]
 
 [workspace.dependencies]
 rolt = { git = "https://github.com/SecondHalfGames/jolt-rust", rev = "72ac0cb1" }
