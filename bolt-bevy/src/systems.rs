@@ -2,9 +2,9 @@ use bevy::math::Affine3A;
 use bevy::prelude::*;
 
 use crate::components::{AngularVelocity, JoltBody, LinearVelocity};
+use crate::config::PhysicsConfig;
 use crate::prelude::{Collider, RigidBody};
 use crate::world::PhysicsWorld;
-use crate::config::PhysicsConfig;
 
 /// System sets for ordering physics execution.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -35,32 +35,21 @@ pub fn spawn_physics_bodies(
     query: Query<
         (
             Entity,
-            &Transform,
-            Option<&GlobalTransform>,
             &RigidBody,
             &Collider,
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
         ),
-        Added<RigidBody>,
+        (Or<(Added<RigidBody>, Added<Collider>)>, Without<JoltBody>),
     >,
+    transform_helper: bevy::transform::helper::TransformHelper,
     mut physics_world: ResMut<PhysicsWorld>,
 ) {
-    for (
-        entity,
-        transform,
-        global_transform,
-        rigidbody,
-        collider,
-        linear_velocity,
-        angular_velocity,
-    ) in query.iter()
-    {
-        let (position, rotation) = if let Some(global) = global_transform {
-            (global.translation(), global.rotation())
-        } else {
-            (transform.translation, transform.rotation)
-        };
+    for (entity, rigidbody, collider, linear_velocity, angular_velocity) in query.iter() {
+        let global = transform_helper
+            .compute_global_transform(entity)
+            .unwrap_or(GlobalTransform::IDENTITY);
+        let (position, rotation) = (global.translation(), global.rotation());
 
         let lin_vel = linear_velocity.map(|v| **v).unwrap_or(Vec3::ZERO);
         let ang_vel = angular_velocity.map(|v| **v).unwrap_or(Vec3::ZERO);
@@ -102,6 +91,7 @@ pub fn spawn_physics_bodies(
 /// If the entity possesses a [`LinearVelocity`] or [`AngularVelocity`] component, it will be
 /// overwritten with the current velocity of the physics body from the simulation step.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::collapsible_if)]
 pub fn sync_transforms(
     mut query: Query<
         (
@@ -131,19 +121,19 @@ pub fn sync_transforms(
                 transform.rotation = world_rot;
             }
 
-            if let (Some(mut velocity), Some(jolt_vel)) =
-                (lin_vel, physics_world.get_linear_velocity(body.0))
-            {
-                if velocity.0 != jolt_vel {
-                    velocity.0 = jolt_vel;
+            if let Some(mut velocity) = lin_vel {
+                if let Some(jolt_vel) = physics_world.get_linear_velocity(body.0) {
+                    if velocity.0 != jolt_vel {
+                        velocity.0 = jolt_vel;
+                    }
                 }
             }
 
-            if let (Some(mut velocity), Some(jolt_vel)) =
-                (ang_vel, physics_world.get_angular_velocity(body.0))
-            {
-                if velocity.0 != jolt_vel {
-                    velocity.0 = jolt_vel;
+            if let Some(mut velocity) = ang_vel {
+                if let Some(jolt_vel) = physics_world.get_angular_velocity(body.0) {
+                    if velocity.0 != jolt_vel {
+                        velocity.0 = jolt_vel;
+                    }
                 }
             }
         }
@@ -159,7 +149,7 @@ pub fn cleanup_despawned_physics_bodies(
 ) {
     if let Ok(body) = query.get(event.entity) {
         physics_world.destroy_body(body.0);
-        info!(
+        debug!(
             "Successfully cleaned up Jolt body for despawned entity {:?}",
             event.entity
         );
@@ -169,6 +159,7 @@ pub fn cleanup_despawned_physics_bodies(
 /// Scans the ECS for any physics bodies whose [`LinearVelocity`] or [`AngularVelocity`]
 /// components were modified by the user this frame, and synchronizes those changes
 /// down into the internal Jolt physics engine before the next simulation step.
+#[allow(clippy::type_complexity)]
 pub fn apply_velocities(
     mut physics_world: ResMut<PhysicsWorld>,
     query: Query<
@@ -194,6 +185,20 @@ pub fn step_physics(
 ) {
     let delta_time = time.delta_secs();
     world.step(delta_time, config.collision_steps as i32);
+}
+
+/// Observer that removes the JoltBody when RigidBody is removed.
+pub fn remove_jolt_body_on_rigidbody_removal(event: On<Remove, RigidBody>, mut commands: Commands) {
+    if let Ok(mut entity) = commands.get_entity(event.entity) {
+        entity.remove::<JoltBody>();
+    }
+}
+
+/// Observer that removes the JoltBody when Collider is removed.
+pub fn remove_jolt_body_on_collider_removal(event: On<Remove, Collider>, mut commands: Commands) {
+    if let Ok(mut entity) = commands.get_entity(event.entity) {
+        entity.remove::<JoltBody>();
+    }
 }
 
 #[cfg(test)]
