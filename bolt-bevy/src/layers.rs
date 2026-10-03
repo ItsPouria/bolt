@@ -1,4 +1,4 @@
-/// A simple broad phase layer implementation that puts all objects in a single layer.
+//! A simple broad phase layer implementation that puts all objects in a single layer.
 use rolt::{
     BroadPhaseLayer, BroadPhaseLayerInterface, ObjectLayer, ObjectLayerPairFilter,
     ObjectVsBroadPhaseLayerFilter,
@@ -8,7 +8,7 @@ use rolt::{
 pub const OBJECT_LAYER_STATIC: ObjectLayer = ObjectLayer::new(0);
 /// Object Layer Dynamic constant.
 pub const OBJECT_LAYER_DYNAMIC: ObjectLayer = ObjectLayer::new(1);
-/// Num Object Layers constant.
+/// The total number of distinct object collision layers used in the engine.
 pub const NUM_OBJECT_LAYERS: u32 = 2;
 
 /// Broad phase spatial trees.
@@ -65,7 +65,10 @@ mod tests {
     fn test_simple_layers() {
         // Test the broad phase
         let broad_phase = SimpleBroadPhaseLayer;
-        assert_eq!(broad_phase.get_num_broad_phase_layers(), NUM_BROAD_PHASE_LAYERS);
+        assert_eq!(
+            broad_phase.get_num_broad_phase_layers(),
+            NUM_BROAD_PHASE_LAYERS
+        );
         assert_eq!(
             broad_phase.get_broad_phase_layer(OBJECT_LAYER_STATIC),
             BROAD_PHASE_LAYER_STATIC
