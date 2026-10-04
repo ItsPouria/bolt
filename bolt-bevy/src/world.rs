@@ -63,9 +63,13 @@ impl PhysicsWorld {
             SimpleObjectLayerPairFilter,
         );
 
+        let temp_allocator_bytes = config
+            .temp_allocator_size_mb
+            .checked_mul(1024 * 1024)
+            .expect("temp_allocator_size_mb in bytes overflows u32");
+
         // SAFETY: 10MB is a valid size for the Jolt temp allocator.
-        let temp_allocator_ptr =
-            unsafe { JPC_TempAllocatorImpl_new(config.temp_allocator_size_mb * 1024 * 1024) }; // 10 MB
+        let temp_allocator_ptr = unsafe { JPC_TempAllocatorImpl_new(temp_allocator_bytes) };
         let temp_allocator = NonNull::new(temp_allocator_ptr)
             .expect("Failed to allocate Jolt TempAllocator: Out of memory");
         // SAFETY: Thread counts and max jobs constants are valid parameters for Jolt.
