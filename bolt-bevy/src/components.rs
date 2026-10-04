@@ -53,3 +53,8 @@ pub struct LinearVelocity(pub Vec3);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
 #[reflect(Component)]
 pub struct AngularVelocity(pub Vec3);
+
+/// A marker component used to efficiently filter out static bodies from transform synchronization.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]
+#[reflect(Component)]
+pub struct StaticMarker;
