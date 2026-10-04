@@ -49,24 +49,27 @@ pub fn spawn_physics_bodies(
         let global = transform_helper
             .compute_global_transform(entity)
             .unwrap_or(GlobalTransform::IDENTITY);
-        let (position, rotation) = (global.translation(), global.rotation());
+        let (scale, rotation, position) = global.to_scale_rotation_translation();
 
         let lin_vel = linear_velocity.map(|v| **v).unwrap_or(Vec3::ZERO);
         let ang_vel = angular_velocity.map(|v| **v).unwrap_or(Vec3::ZERO);
 
-        let body_id = match collider {
-            Collider::Box { half_extents } => physics_world.spawn_box(
-                entity,
-                *half_extents,
-                (position, rotation),
-                rigidbody,
-                lin_vel,
-                ang_vel,
-            ),
-        };
+        let body_id = physics_world.spawn_body(
+            entity,
+            collider,
+            scale,
+            (position, rotation),
+            rigidbody,
+            lin_vel,
+            ang_vel,
+        );
 
         if let Some(id) = body_id {
-            commands.entity(entity).insert(JoltBody(id));
+            let mut entity_cmds = commands.entity(entity);
+            entity_cmds.insert(JoltBody(id));
+            if *rigidbody == RigidBody::Static {
+                entity_cmds.insert(crate::components::StaticMarker);
+            }
         } else {
             error!("Failed to spawn physics body for entity {:?}", entity);
             commands
