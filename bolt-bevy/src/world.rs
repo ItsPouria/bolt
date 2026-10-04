@@ -452,9 +452,8 @@ fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
         if JPC_BoxShapeSettings_Create(&settings, &mut shape, &mut err) {
             Some(shape)
         } else {
-            let err_str = std::ffi::CStr::from_ptr(joltc_sys::JPC_String_c_str(err));
-            error!("Failed to create box shape: {:?}", err_str);
-            joltc_sys::JPC_String_delete(err);
+            let error_msg = extract_jolt_error(err);
+            error!("Failed to create box shape: {error_msg}");
             None
         }
     }
@@ -468,6 +467,23 @@ fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
 unsafe impl Send for PhysicsWorld {}
 // SAFETY: See Send justification. Jolt's C++ locks make `&self` reads safe across threads.
 unsafe impl Sync for PhysicsWorld {}
+
+/// Safely extracts Jolt's FFI error string into a Rust String and deletes the C++ allocation.
+///
+/// # Safety
+/// If `err` is non-null, it must point to a valid `JPC_String` allocated by Jolt.
+unsafe fn extract_jolt_error(err: *mut joltc_sys::JPC_String) -> String {
+    if err.is_null() {
+        return "unknown Jolt error".to_string();
+    }
+
+    unsafe {
+        let c_str = std::ffi::CStr::from_ptr(joltc_sys::JPC_String_c_str(err));
+        let message = c_str.to_string_lossy().into_owned();
+        joltc_sys::JPC_String_delete(err);
+        message
+    }
+}
 
 #[cfg(test)]
 mod tests {
