@@ -207,10 +207,10 @@ impl PhysicsWorld {
 
     /// Retrieves the current position and rotation of the body from Jolt.
     pub fn get_transform(&self, body_id: rolt::BodyId) -> Option<(Vec3, Quat)> {
-        if body_id.raw() == INVALID_BODY_ID {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
             return None;
         }
-        // SAFETY: We verify the body ID is valid and added before querying its state.
+        // SAFETY: body_id is verified to be valid and allocated in this PhysicsWorld.
         unsafe {
             let body_interface = self.body_interface();
 
@@ -218,8 +218,25 @@ impl PhysicsWorld {
                 return None;
             }
 
-            let pos = joltc_sys::JPC_BodyInterface_GetPosition(body_interface, body_id.raw());
-            let rot = joltc_sys::JPC_BodyInterface_GetRotation(body_interface, body_id.raw());
+            let mut pos = joltc_sys::JPC_Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                _w: 0.0,
+            };
+            let mut rot = joltc_sys::JPC_Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 0.0,
+            };
+
+            joltc_sys::JPC_BodyInterface_GetPositionAndRotation(
+                body_interface,
+                body_id.raw(),
+                &mut pos,
+                &mut rot,
+            );
 
             Some((
                 Vec3::new(pos.x as f32, pos.y as f32, pos.z as f32),
@@ -227,10 +244,9 @@ impl PhysicsWorld {
             ))
         }
     }
-
     /// Get Linear Velocity.
     pub fn get_linear_velocity(&self, body_id: rolt::BodyId) -> Option<Vec3> {
-        if body_id.raw() == INVALID_BODY_ID {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
             return None;
         }
         // SAFETY: We verify the body ID is valid and added before querying its state.
@@ -250,7 +266,7 @@ impl PhysicsWorld {
 
     /// Get Angular Velocity.
     pub fn get_angular_velocity(&self, body_id: rolt::BodyId) -> Option<Vec3> {
-        if body_id.raw() == INVALID_BODY_ID {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
             return None;
         }
         // SAFETY: We verify the body ID is valid and added before querying its state.
@@ -270,7 +286,7 @@ impl PhysicsWorld {
 
     /// Set Linear Velocity.
     pub fn set_linear_velocity(&mut self, body_id: rolt::BodyId, linear_velocity: Vec3) {
-        if body_id.raw() == INVALID_BODY_ID {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
             return;
         }
         // SAFETY: We verify the body ID is valid and added before mutating its state.
@@ -294,7 +310,7 @@ impl PhysicsWorld {
 
     /// Set Angular Velocity.
     pub fn set_angular_velocity(&mut self, body_id: rolt::BodyId, angular_velocity: Vec3) {
-        if body_id.raw() == INVALID_BODY_ID {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
             return;
         }
         // SAFETY: We verify the body ID is valid and added before mutating its state.
@@ -388,6 +404,17 @@ impl FromWorld for PhysicsWorld {
 
 impl Drop for PhysicsWorld {
     fn drop(&mut self) {
+        //SAFETY: Clean up all live bodies before tearing down the physics system.
+        unsafe {
+            let body_interface = self.body_interface();
+            for (body_id, _) in self.body_registry.drain() {
+                if joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                    joltc_sys::JPC_BodyInterface_RemoveBody(body_interface, body_id.raw());
+                }
+                joltc_sys::JPC_BodyInterface_DestroyBody(body_interface, body_id.raw());
+            }
+        }
+
         // SAFETY: Drop ordering is critical. The `physics_system` MUST be dropped first,
         // as Jolt internally references the job_system and temp_allocator during its shutdown.
         unsafe {
