@@ -243,7 +243,7 @@ impl PhysicsWorld {
             );
 
             Some((
-                Vec3::new(pos.x as f32, pos.y as f32, pos.z as f32),
+                Vec3::new(pos.x, pos.y, pos.z),
                 bevy::prelude::Quat::from_xyzw(rot.x, rot.y, rot.z, rot.w),
             ))
         }
@@ -482,6 +482,7 @@ unsafe fn extract_jolt_error(err: *mut joltc_sys::JPC_String) -> String {
         return "unknown Jolt error".to_string();
     }
 
+    // SAFETY: The caller guarantees `err` is a valid `JPC_String`. We extract the string and delete the allocation.
     unsafe {
         let c_str = std::ffi::CStr::from_ptr(joltc_sys::JPC_String_c_str(err));
         let message = c_str.to_string_lossy().into_owned();
@@ -706,6 +707,7 @@ mod tests {
         };
 
         // Trigger Jolt C++ to allocate an actual JPC_String error
+        // SAFETY: `settings` is initialized, and `shape`/`err` are valid output pointers.
         let success =
             unsafe { joltc_sys::JPC_BoxShapeSettings_Create(&settings, &mut shape, &mut err) };
         assert!(!success, "Shape creation must fail for negative extents");
@@ -736,6 +738,7 @@ mod tests {
         let shape_ptr = shape.unwrap();
         assert!(!shape_ptr.is_null());
         // Clean up the ref-counted shape
+        // SAFETY: `shape_ptr` is a valid shape created by `create_box_shape`.
         unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
     }
 
