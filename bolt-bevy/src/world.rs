@@ -434,6 +434,11 @@ impl Drop for PhysicsWorld {
 }
 
 fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
+    if !half_extents.is_finite() || half_extents.min_element() <= 0.0 {
+        error!("Invalid box half_extents: {}", half_extents);
+        return None;
+    }
+
     let mut shape: *mut JPC_Shape = ptr::null_mut();
     let mut err: *mut JPC_String = ptr::null_mut();
 
@@ -675,5 +680,127 @@ mod tests {
         // 3. Destroyed body returns false
         physics_world.destroy_body(body_id);
         assert!(!physics_world.is_active(body_id));
+    }
+
+    #[test]
+    fn test_extract_jolt_error_handles_null_pointer_gracefully() {
+        // SAFETY: Testing graceful null handling
+        let message = unsafe { extract_jolt_error(std::ptr::null_mut()) };
+        assert_eq!(message, "unknown Jolt error");
+    }
+
+    #[test]
+    fn test_extract_jolt_error_extracts_and_frees_real_jolt_string() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let mut shape: *mut joltc_sys::JPC_Shape = std::ptr::null_mut();
+        let mut err: *mut joltc_sys::JPC_String = std::ptr::null_mut();
+
+        let settings = joltc_sys::JPC_BoxShapeSettings {
+            HalfExtent: joltc_sys::JPC_Vec3 {
+                x: -1.0,
+                y: -1.0,
+                z: -1.0,
+                _w: 0.0,
+            },
+            ..Default::default()
+        };
+
+        // Trigger Jolt C++ to allocate an actual JPC_String error
+        let success =
+            unsafe { joltc_sys::JPC_BoxShapeSettings_Create(&settings, &mut shape, &mut err) };
+        assert!(!success, "Shape creation must fail for negative extents");
+        assert!(
+            !err.is_null(),
+            "Jolt must allocate an error string on failure"
+        );
+
+        // SAFETY: err is a valid JPC_String allocated by Jolt.
+        // Verifies conversion to Rust String AND that JPC_String_delete succeeds without crash.
+        let error_message = unsafe { extract_jolt_error(err) };
+        assert!(
+            !error_message.is_empty(),
+            "Error message should not be empty"
+        );
+        assert_ne!(
+            error_message, "unknown Jolt error",
+            "Should contain actual Jolt error details"
+        );
+    }
+
+    #[test]
+    fn test_create_box_shape_valid_extents_succeeds() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = create_box_shape(Vec3::splat(1.0));
+        assert!(shape.is_some(), "Valid half-extents must produce a shape");
+
+        let shape_ptr = shape.unwrap();
+        assert!(!shape_ptr.is_null());
+        // Clean up the ref-counted shape
+        unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
+    }
+
+    #[test]
+    fn test_create_box_shape_negative_extents_returns_none() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = create_box_shape(Vec3::splat(-1.0));
+        assert!(shape.is_none(), "Negative half-extents must return None");
+    }
+
+    #[test]
+    fn test_create_box_shape_zero_extents_returns_none() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = create_box_shape(Vec3::ZERO);
+        assert!(shape.is_none(), "Zero half-extents must return None");
+    }
+
+    #[test]
+    fn test_physics_world_drop_destroys_live_bodies_cleanly() {
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
+
+        // Spawn multiple dynamic bodies
+        for i in 0..10 {
+            let entity = Entity::from_raw_u32(i + 1).unwrap();
+            physics_world.spawn_box(
+                entity,
+                Vec3::splat(1.0),
+                (Vec3::new(i as f32, 0.0, 0.0), Quat::IDENTITY),
+                &RigidBody::Dynamic,
+                Vec3::ZERO,
+                Vec3::ZERO,
+            );
+        }
+
+        // Dropping physics_world with active bodies must not trigger JPH_ASSERT(mNumBodies == 0)
+        drop(physics_world);
+    }
+
+    #[test]
+    fn test_getters_return_none_for_unallocated_body_id() {
+        let physics_world = PhysicsWorld::new(PhysicsConfig::default());
+        let unallocated = rolt::BodyId::new(99_999);
+
+        assert!(physics_world.get_transform(unallocated).is_none());
+        assert!(physics_world.get_linear_velocity(unallocated).is_none());
+        assert!(physics_world.get_angular_velocity(unallocated).is_none());
+    }
+
+    #[test]
+    fn test_setters_noop_for_unallocated_body_id() {
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
+        let unallocated = rolt::BodyId::new(99_999);
+
+        // Mutating unallocated ID must safely no-op without memory corruption
+        physics_world.set_linear_velocity(unallocated, Vec3::X);
+        physics_world.set_angular_velocity(unallocated, Vec3::Y);
+    }
+
+    #[test]
+    #[should_panic(expected = "temp_allocator_size_mb in bytes overflows u32")]
+    fn test_temp_allocator_overflow_panics_safely() {
+        let config = PhysicsConfig {
+            temp_allocator_size_mb: u32::MAX,
+            ..Default::default()
+        };
+        let _ = PhysicsWorld::new(config);
     }
 }
