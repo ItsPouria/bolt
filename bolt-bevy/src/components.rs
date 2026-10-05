@@ -23,8 +23,27 @@ pub enum RigidBody {
 pub enum Collider {
     /// A 3D box defined by its half-extents from the center.
     Box {
-        /// Half-extents along the X, Y, and Z axes (width / 2, height / 2, depth / 2).
+        /// Half-extents along the X, Y, and Z axes.
         half_extents: Vec3,
+    },
+    /// A 3D sphere defined by its radius.
+    Sphere {
+        /// The radius of the sphere.
+        radius: f32,
+    },
+    /// A 3D capsule (a cylinder with hemispherical ends) aligned along the Y axis.
+    Capsule {
+        /// Half the height of the cylindrical portion of the capsule.
+        half_height: f32,
+        /// The radius of the cylinder and the hemispherical ends.
+        radius: f32,
+    },
+    /// A 3D cylinder aligned along the Y axis.
+    Cylinder {
+        /// Half the height of the cylinder.
+        half_height: f32,
+        /// The radius of the cylinder.
+        radius: f32,
     },
 }
 

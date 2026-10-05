@@ -121,6 +121,15 @@ impl PhysicsWorld {
         let (position, rotation) = transform;
         let shape_ptr = match collider {
             Collider::Box { half_extents } => create_box_shape(*half_extents * scale)?,
+            Collider::Sphere { radius } => create_sphere_shape(radius * scale.max_element())?,
+            Collider::Capsule {
+                half_height,
+                radius,
+            } => create_capsule_shape(half_height * scale.y, radius * scale.x.max(scale.z))?,
+            Collider::Cylinder {
+                half_height,
+                radius,
+            } => create_cylinder_shape(half_height * scale.y, radius * scale.x.max(scale.z))?,
         };
 
         let motion_type = match rigidbody {
@@ -478,6 +487,60 @@ impl Drop for PhysicsWorld {
             JPC_TempAllocatorImpl_delete(self.temp_allocator.as_ptr());
         }
     }
+}
+
+fn create_sphere_shape(radius: f32) -> Option<*mut joltc_sys::JPC_Shape> {
+    if radius <= 0.0 || !radius.is_finite() {
+        return None;
+    }
+    let mut shape: *mut joltc_sys::JPC_Shape = std::ptr::null_mut();
+    let mut err: *mut joltc_sys::JPC_String = std::ptr::null_mut();
+    let settings = joltc_sys::JPC_SphereShapeSettings {
+        Radius: radius,
+        ..Default::default()
+    };
+    unsafe {
+        joltc_sys::JPC_SphereShapeSettings_Create(&settings, &mut shape, &mut err);
+        crate::world::extract_jolt_error(err);
+    }
+    if shape.is_null() { None } else { Some(shape) }
+}
+
+fn create_capsule_shape(half_height: f32, radius: f32) -> Option<*mut joltc_sys::JPC_Shape> {
+    if radius <= 0.0 || half_height < 0.0 || !radius.is_finite() || !half_height.is_finite() {
+        return None;
+    }
+    let mut shape: *mut joltc_sys::JPC_Shape = std::ptr::null_mut();
+    let mut err: *mut joltc_sys::JPC_String = std::ptr::null_mut();
+    let settings = joltc_sys::JPC_CapsuleShapeSettings {
+        HalfHeightOfCylinder: half_height,
+        Radius: radius,
+        ..Default::default()
+    };
+    unsafe {
+        joltc_sys::JPC_CapsuleShapeSettings_Create(&settings, &mut shape, &mut err);
+        crate::world::extract_jolt_error(err);
+    }
+    if shape.is_null() { None } else { Some(shape) }
+}
+
+fn create_cylinder_shape(half_height: f32, radius: f32) -> Option<*mut joltc_sys::JPC_Shape> {
+    if radius <= 0.0 || half_height <= 0.0 || !radius.is_finite() || !half_height.is_finite() {
+        return None;
+    }
+    let mut shape: *mut joltc_sys::JPC_Shape = std::ptr::null_mut();
+    let mut err: *mut joltc_sys::JPC_String = std::ptr::null_mut();
+    let settings = joltc_sys::JPC_CylinderShapeSettings {
+        HalfHeight: half_height,
+        Radius: radius,
+        ConvexRadius: 0.05,
+        ..Default::default()
+    };
+    unsafe {
+        joltc_sys::JPC_CylinderShapeSettings_Create(&settings, &mut shape, &mut err);
+        crate::world::extract_jolt_error(err);
+    }
+    if shape.is_null() { None } else { Some(shape) }
 }
 
 fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
