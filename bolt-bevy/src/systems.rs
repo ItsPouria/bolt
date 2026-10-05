@@ -239,14 +239,16 @@ mod tests {
     use super::*;
     use crate::plugin::BoltPlugin;
 
-
     #[test]
     fn test_apply_user_transforms_teleports_body() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(BoltPlugin::default());
         // Insert time update strategy so FixedUpdate runs reliably in tests
-        app.world_mut().insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)));
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 60.0),
+            ));
         // In case step 2.5 is not done yet, add it manually
         app.add_systems(FixedUpdate, apply_user_transforms);
 
@@ -271,16 +273,15 @@ mod tests {
             let mut transform = app.world_mut().get_mut::<Transform>(entity).unwrap();
             transform.translation = Vec3::new(100.0, 200.0, 300.0);
         }
-        
+
         // Ensure FixedUpdate runs again
         let _ = app.world_mut().run_system_once(apply_user_transforms);
         // Step physics manually so get_transform returns the updated value if needed
         // Actually set_position_and_rotation updates Jolt immediately.
 
-
         let physics_world = app.world().get_resource::<PhysicsWorld>().unwrap();
         let jolt_body = app.world().get::<JoltBody>(entity).unwrap();
-        
+
         let (pos, _) = physics_world.get_transform(jolt_body.0).unwrap();
         assert!(pos.distance(Vec3::new(100.0, 200.0, 300.0)) < 1e-4);
     }

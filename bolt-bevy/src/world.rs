@@ -106,6 +106,7 @@ impl PhysicsWorld {
     }
 
     /// Spawns a body into the Jolt physics world and returns its ID.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn_body(
         &mut self,
         entity: Entity,
@@ -545,14 +546,15 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_set_position_and_rotation_valid_body() {
         let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
         let body_id = physics_world
             .spawn_body(
                 Entity::PLACEHOLDER,
-                &crate::components::Collider::Box { half_extents: Vec3::splat(1.0) },
+                &crate::components::Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
                 Vec3::ONE,
                 (Vec3::ZERO, Quat::IDENTITY),
                 &RigidBody::Dynamic,
@@ -579,7 +581,7 @@ mod tests {
         let invalid_id = rolt::BodyId::new(INVALID_BODY_ID);
         // Should not panic or crash
         physics_world.set_position_and_rotation(invalid_id, Vec3::ZERO, Quat::IDENTITY);
-        
+
         let fake_id = rolt::BodyId::new(9999);
         physics_world.set_position_and_rotation(fake_id, Vec3::ZERO, Quat::IDENTITY);
     }
