@@ -321,30 +321,3 @@ mod tests {
         assert!(app.world().get::<JoltBody>(broken_entity).is_none());
     }
 }
-
-/// Draws wireframes representing the authoritative physics state directly from Jolt.
-pub fn debug_draw_colliders(
-    mut gizmos: Gizmos,
-    physics_world: Res<crate::world::PhysicsWorld>,
-    query: Query<(&crate::components::JoltBody, &crate::components::Collider, &GlobalTransform)>,
-) {
-    for (body, collider, global_transform) in query.iter() {
-        // Bypass Bevy's transform and ask Jolt exactly where the body is right now
-        if let Some((pos, rot)) = physics_world.get_transform(body.0) {
-            let scale = global_transform.compute_transform().scale;
-
-            match collider {
-                crate::components::Collider::Box { half_extents } => {
-                    let scaled_extents = *half_extents * scale;
-                    // Draw a bright green wireframe box
-                    gizmos.cube(
-                        Transform::from_translation(pos).with_rotation(rot).with_scale(scaled_extents * 2.0),
-                        Color::srgb(0.0, 1.0, 0.0),
-                    );
-                }
-                #[allow(unreachable_patterns)]
-                _ => {}
-            }
-        }
-    }
-}

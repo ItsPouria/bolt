@@ -17,13 +17,7 @@ fn main() {
         .add_plugins(ExampleStatsPlugin)
         .insert_resource(SpawnTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
         .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (
-                spawn_random_boxes,
-                bolt_bevy::systems::debug_draw_colliders,
-            ),
-        )
+        .add_systems(Update, spawn_random_boxes)
         .run();
 }
 
