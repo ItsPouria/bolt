@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::TimeUpdateStrategy::ManualDuration;
 use bolt_bevy::prelude::*;
 
 fn physics_test_app() -> App {
@@ -47,6 +48,9 @@ fn test_gravity_pulls_dynamic_bodies() {
 fn test_fixed_timestep_prevents_micro_updates() {
     let mut app = physics_test_app();
 
+    // Freeze wall-clock time so test timing is deterministic
+    app.world_mut()
+        .insert_resource(ManualDuration(Duration::ZERO));
     // 1. Spawn a box exactly at Y = 10.0
     let start_y = 10.0;
     let entity = app
