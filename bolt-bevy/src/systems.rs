@@ -1,7 +1,9 @@
 use bevy::math::Affine3A;
 use bevy::prelude::*;
 
-use crate::components::{AngularVelocity, JoltBody, LinearVelocity, StaticMarker};
+use crate::components::{
+    AngularVelocity, JoltBody, LinearVelocity, StaticMarker,
+};
 use crate::config::PhysicsConfig;
 use crate::prelude::{Collider, RigidBody};
 use crate::world::PhysicsWorld;
@@ -39,13 +41,14 @@ pub fn spawn_physics_bodies(
             &Collider,
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
+            Option<&crate::components::ContinuousCollision>,
         ),
         (Or<(Added<RigidBody>, Added<Collider>)>, Without<JoltBody>),
     >,
     transform_helper: bevy::transform::helper::TransformHelper,
     mut physics_world: ResMut<PhysicsWorld>,
 ) {
-    for (entity, rigidbody, collider, linear_velocity, angular_velocity) in query.iter() {
+    for (entity, rigidbody, collider, linear_velocity, angular_velocity, ccd) in query.iter() {
         let global = transform_helper
             .compute_global_transform(entity)
             .unwrap_or(GlobalTransform::IDENTITY);
@@ -62,6 +65,7 @@ pub fn spawn_physics_bodies(
             rigidbody,
             lin_vel,
             ang_vel,
+            ccd.is_some(),
         );
 
         if let Some(id) = body_id {

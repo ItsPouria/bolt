@@ -58,3 +58,11 @@ pub struct AngularVelocity(pub Vec3);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]
 #[reflect(Component)]
 pub struct StaticMarker;
+
+/// Enables Continuous Collision Detection (CCD) for a dynamic rigid body.
+///
+/// Use this on fast-moving objects to prevent them from tunneling through walls
+/// or visually penetrating the floor.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]
+#[reflect(Component)]
+pub struct ContinuousCollision;

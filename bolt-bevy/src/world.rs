@@ -116,6 +116,7 @@ impl PhysicsWorld {
         rigidbody: &RigidBody,
         linear_velocity: Vec3,
         angular_velocity: Vec3,
+        use_ccd: bool,
     ) -> Option<rolt::BodyId> {
         let (position, rotation) = transform;
         let shape_ptr = match collider {
@@ -126,6 +127,12 @@ impl PhysicsWorld {
             RigidBody::Dynamic => joltc_sys::JPC_MOTION_TYPE_DYNAMIC,
             RigidBody::Static => joltc_sys::JPC_MOTION_TYPE_STATIC,
             RigidBody::Kinematic => joltc_sys::JPC_MOTION_TYPE_KINEMATIC,
+        };
+
+        let motion_quality = if use_ccd && *rigidbody == RigidBody::Dynamic {
+            joltc_sys::JPC_MOTION_QUALITY_LINEAR_CAST
+        } else {
+            joltc_sys::JPC_MOTION_QUALITY_DISCRETE
         };
 
         let position = joltc_sys::JPC_Vec3 {
@@ -161,10 +168,11 @@ impl PhysicsWorld {
             RigidBody::Dynamic | RigidBody::Kinematic => OBJECT_LAYER_DYNAMIC.raw(),
         };
 
-        let settings = joltc_sys::JPC_BodyCreationSettings {
+                let settings = joltc_sys::JPC_BodyCreationSettings {
             Position: position,
             Rotation: rotation,
             MotionType: motion_type,
+            MotionQuality: motion_quality,
             ObjectLayer: object_layer,
             Shape: shape_ptr,
             LinearVelocity: lin_vel,
@@ -560,6 +568,7 @@ mod tests {
                 &RigidBody::Dynamic,
                 Vec3::ZERO,
                 Vec3::ZERO,
+            false,
             )
             .expect("Failed to spawn body");
 
@@ -602,6 +611,7 @@ mod tests {
             &rigidbody,
             Vec3::ZERO,
             Vec3::ZERO,
+        false,
         );
 
         assert!(result.is_some());
@@ -623,6 +633,7 @@ mod tests {
             &rigidbody,
             Vec3::ZERO,
             Vec3::ZERO,
+        false,
         );
 
         assert!(result.is_some());
@@ -644,6 +655,7 @@ mod tests {
             &rigidbody,
             Vec3::ZERO,
             Vec3::ZERO,
+        false,
         );
 
         assert!(result.is_none());
@@ -673,6 +685,7 @@ mod tests {
                 &RigidBody::Dynamic,
                 Vec3::ZERO,
                 Vec3::ZERO,
+            false,
             )
             .expect("Failed to spawn box");
         assert!(physics_world.get_transform(body_id).is_some());
@@ -698,6 +711,7 @@ mod tests {
                 &RigidBody::Dynamic,
                 Vec3::ZERO,
                 Vec3::ZERO,
+            false,
             )
             .expect("Failed to spawn box");
 
@@ -735,6 +749,7 @@ mod tests {
                 &rigidbody,
                 Vec3::ZERO,
                 Vec3::ZERO,
+            false,
             )
             .expect("Failed to spawn box");
 
@@ -774,6 +789,7 @@ mod tests {
                 &RigidBody::Dynamic,
                 Vec3::ZERO,
                 Vec3::ZERO,
+            false,
             )
             .expect("Failed to spawn box");
         assert!(physics_world.is_active(body_id));
@@ -873,7 +889,8 @@ mod tests {
                 &RigidBody::Dynamic,
                 Vec3::ZERO,
                 Vec3::ZERO,
-            );
+            false,
+        );
         }
 
         // Dropping physics_world with active bodies must not trigger JPH_ASSERT(mNumBodies == 0)
