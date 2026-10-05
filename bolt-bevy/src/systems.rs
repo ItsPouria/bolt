@@ -1,7 +1,7 @@
 use bevy::math::Affine3A;
 use bevy::prelude::*;
 
-use crate::components::{AngularVelocity, JoltBody, LinearVelocity};
+use crate::components::{AngularVelocity, JoltBody, LinearVelocity, StaticMarker};
 use crate::config::PhysicsConfig;
 use crate::prelude::{Collider, RigidBody};
 use crate::world::PhysicsWorld;
@@ -104,7 +104,7 @@ pub fn sync_transforms(
             Option<&mut LinearVelocity>,
             Option<&mut AngularVelocity>,
         ),
-        With<RigidBody>,
+        (With<RigidBody>, Without<StaticMarker>),
     >,
     parents: Query<&GlobalTransform>,
     physics_world: Res<PhysicsWorld>,
@@ -127,7 +127,7 @@ pub fn sync_transforms(
             if let Some(mut velocity) = lin_vel {
                 if let Some(jolt_vel) = physics_world.get_linear_velocity(body.0) {
                     if velocity.0 != jolt_vel {
-                        velocity.0 = jolt_vel;
+                        velocity.bypass_change_detection().0 = jolt_vel;
                     }
                 }
             }
@@ -135,7 +135,7 @@ pub fn sync_transforms(
             if let Some(mut velocity) = ang_vel {
                 if let Some(jolt_vel) = physics_world.get_angular_velocity(body.0) {
                     if velocity.0 != jolt_vel {
-                        velocity.0 = jolt_vel;
+                        velocity.bypass_change_detection().0 = jolt_vel;
                     }
                 }
             }
