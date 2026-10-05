@@ -8,7 +8,12 @@ struct SpawnTimer(Timer);
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugins(BoltPlugin::default())
+        .add_plugins(BoltPlugin {
+            config: bolt_bevy::config::PhysicsConfig {
+                collision_steps: 4,
+                ..Default::default()
+            },
+        })
         .add_plugins(ExampleStatsPlugin)
         .insert_resource(SpawnTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
         .add_systems(Startup, setup)
