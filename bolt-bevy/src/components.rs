@@ -17,32 +17,51 @@ pub enum RigidBody {
 }
 
 /// The geometric collision shape attached to a rigid body.
+///
+/// All dimensions are in local space (meters) before the entity's `Transform::scale` is applied.
+/// When spawned, Bolt will automatically scale these primitives based on the entity's global scale.
 #[non_exhaustive]
 #[derive(Component, Clone, Debug, PartialEq, Reflect)]
 #[reflect(Component)]
 pub enum Collider {
     /// A 3D box defined by its half-extents from the center.
+    ///
+    /// The total width, height, and depth of the box are exactly twice the half-extents.
     Box {
-        /// Half-extents along the X, Y, and Z axes.
+        /// The distance from the center of the box to its faces along the local X, Y, and Z axes (in meters).
         half_extents: Vec3,
     },
-    /// A 3D sphere defined by its radius.
+    /// A perfectly spherical collision volume.
+    ///
+    /// **Note on scaling:** True ellipsoids are not supported by the underlying physics solver.
+    /// If a non-uniform scale is applied to the entity, the sphere will be scaled uniformly
+    /// by the largest component of the scale vector (`scale.max_element()`).
     Sphere {
-        /// The radius of the sphere.
+        /// The distance from the center to the surface of the sphere (in meters).
         radius: f32,
     },
-    /// A 3D capsule (a cylinder with hemispherical ends) aligned along the Y axis.
+    /// A 3D capsule (a cylinder capped with two hemispheres).
+    ///
+    /// The capsule is aligned perfectly along the local Y axis. The total height of the
+    /// capsule is `(half_height * 2.0) + (radius * 2.0)`.
+    ///
+    /// **Note on scaling:** Non-uniform scaling on the X and Z axes will use the larger
+    /// of the two values to scale the radius uniformly. The Y axis scales the height independently.
     Capsule {
-        /// Half the height of the cylindrical portion of the capsule.
+        /// Half the height of the inner cylindrical portion of the capsule (in meters).
+        /// Does not include the hemispherical end caps.
         half_height: f32,
-        /// The radius of the cylinder and the hemispherical ends.
+        /// The radius of the central cylinder and the hemispherical end caps (in meters).
         radius: f32,
     },
-    /// A 3D cylinder aligned along the Y axis.
+    /// A 3D cylinder aligned along the local Y axis with flat circular end caps.
+    ///
+    /// **Note on scaling:** Non-uniform scaling on the X and Z axes will use the larger
+    /// of the two values to scale the radius uniformly. The Y axis scales the height independently.
     Cylinder {
-        /// Half the height of the cylinder.
+        /// The distance from the center of the cylinder to the flat top and bottom caps (in meters).
         half_height: f32,
-        /// The radius of the cylinder.
+        /// The radius of the circular cross-section (in meters).
         radius: f32,
     },
 }
