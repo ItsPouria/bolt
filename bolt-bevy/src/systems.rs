@@ -111,17 +111,28 @@ pub fn sync_transforms(
 ) {
     for (mut transform, child_of, body, lin_vel, ang_vel) in query.iter_mut() {
         if let Some((world_pos, world_rot)) = physics_world.get_transform(body.0) {
+            const POS_EPSILON_SQ: f32 = 1e-6;
+            const ROT_EPSILON: f32 = 1e-5;
+
             if let Some(parent_global) = child_of.and_then(|c| parents.get(c.parent()).ok()) {
                 let world_affine = Affine3A::from_rotation_translation(world_rot, world_pos);
                 let local_affine = parent_global.affine().inverse() * world_affine;
                 let (_, local_rotation, local_translation) =
                     local_affine.to_scale_rotation_translation();
 
-                transform.translation = local_translation;
-                transform.rotation = local_rotation;
+                if transform.translation.distance_squared(local_translation) > POS_EPSILON_SQ
+                    || (1.0 - transform.rotation.dot(local_rotation).abs()) > ROT_EPSILON
+                {
+                    transform.translation = local_translation;
+                    transform.rotation = local_rotation;
+                }
             } else {
-                transform.translation = world_pos;
-                transform.rotation = world_rot;
+                if transform.translation.distance_squared(world_pos) > POS_EPSILON_SQ
+                    || (1.0 - transform.rotation.dot(world_rot).abs()) > ROT_EPSILON
+                {
+                    transform.translation = world_pos;
+                    transform.rotation = world_rot;
+                }
             }
 
             if let Some(mut velocity) = lin_vel {
