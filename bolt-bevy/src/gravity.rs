@@ -1,7 +1,8 @@
 use crate::world::PhysicsWorld;
 use bevy::prelude::*;
 
-#[derive(Resource, Debug, Clone, Deref, DerefMut)]
+#[derive(Resource, Debug, Clone, Deref, DerefMut, Reflect)]
+#[reflect(Resource)]
 /// Resource that defines the global gravity vector applied to all dynamic bodies.
 pub struct Gravity(pub Vec3);
 

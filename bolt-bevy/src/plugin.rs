@@ -14,9 +14,20 @@ pub struct BoltPlugin {
 
 impl Plugin for BoltPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(self.config.clone());
+        if !app.world().contains_resource::<PhysicsConfig>() {
+            app.insert_resource(self.config.clone());
+        }
         app.init_resource::<PhysicsWorld>();
         app.init_resource::<Gravity>();
+
+        // Register all reflected physics types
+        app.register_type::<crate::components::RigidBody>()
+            .register_type::<crate::components::Collider>()
+            .register_type::<crate::components::LinearVelocity>()
+            .register_type::<crate::components::AngularVelocity>()
+            .register_type::<crate::components::StaticMarker>()
+            .register_type::<crate::config::PhysicsConfig>()
+            .register_type::<crate::gravity::Gravity>();
 
         app.configure_sets(
             FixedUpdate,
@@ -30,16 +41,28 @@ impl Plugin for BoltPlugin {
                 .chain(),
         );
 
+        // Flush spawn commands immediately so JoltBody is queryable in the same tick
+        app.add_systems(
+            FixedUpdate,
+            ApplyDeferred
+                .after(crate::systems::PhysicsSet::Spawn)
+                .before(crate::systems::PhysicsSet::ApplyVelocities),
+        );
+
         app.add_systems(
             FixedUpdate,
             (
                 spawn_physics_bodies.in_set(crate::systems::PhysicsSet::Spawn),
                 apply_velocities.in_set(crate::systems::PhysicsSet::ApplyVelocities),
+                crate::systems::apply_user_transforms
+                    .in_set(crate::systems::PhysicsSet::ApplyVelocities)
+                    .after(apply_velocities),
                 apply_gravity.in_set(crate::systems::PhysicsSet::ApplyGravity),
                 step_physics.in_set(crate::systems::PhysicsSet::Step),
                 sync_transforms.in_set(crate::systems::PhysicsSet::SyncTransforms),
             ),
         );
+
         app.add_observer(crate::systems::cleanup_despawned_physics_bodies);
         app.add_observer(crate::systems::remove_jolt_body_on_rigidbody_removal);
         app.add_observer(crate::systems::remove_jolt_body_on_collider_removal);
