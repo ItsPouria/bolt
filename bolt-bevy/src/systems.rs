@@ -180,6 +180,36 @@ pub fn apply_velocities(
     }
 }
 
+/// Scans the ECS for any physics bodies whose [`Transform`] was manually modified
+/// by the user this frame, and teleports the corresponding Jolt body.
+#[allow(clippy::type_complexity)]
+pub fn apply_user_transforms(
+    mut physics_world: ResMut<PhysicsWorld>,
+    query: Query<(Entity, &JoltBody, &Transform, Option<&GlobalTransform>), Changed<Transform>>,
+    transform_helper: bevy::transform::helper::TransformHelper,
+) {
+    for (entity, body, transform, global_transform) in query.iter() {
+        let (pos, rot) = if let Some(global) = global_transform {
+            // Compute accurate world transform for child entities immediately
+            let global = transform_helper
+                .compute_global_transform(entity)
+                .unwrap_or(*global);
+            let (_, rot, pos) = global.to_scale_rotation_translation();
+            (pos, rot)
+        } else {
+            (transform.translation, transform.rotation)
+        };
+
+        if let Some((world_pos, world_rot)) = physics_world.get_transform(body.0) {
+            // If the ECS transform diverges from Jolt's authoritative state by a margin,
+            // the user must have modified it manually.
+            if world_pos.distance_squared(pos) > 1e-4 || (1.0 - world_rot.dot(rot).abs()) > 1e-4 {
+                physics_world.set_position_and_rotation(body.0, pos, rot);
+            }
+        }
+    }
+}
+
 /// Steps the internal physics simulation.
 pub fn step_physics(
     mut world: ResMut<PhysicsWorld>,
@@ -208,6 +238,52 @@ pub fn remove_jolt_body_on_collider_removal(event: On<Remove, Collider>, mut com
 mod tests {
     use super::*;
     use crate::plugin::BoltPlugin;
+
+
+    #[test]
+    fn test_apply_user_transforms_teleports_body() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(BoltPlugin::default());
+        // Insert time update strategy so FixedUpdate runs reliably in tests
+        app.world_mut().insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)));
+        // In case step 2.5 is not done yet, add it manually
+        app.add_systems(FixedUpdate, apply_user_transforms);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Dynamic,
+                Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
+            ))
+            .id();
+
+        // Manually run spawn and flush commands
+        use bevy::ecs::system::RunSystemOnce;
+        let _ = app.world_mut().run_system_once(spawn_physics_bodies);
+        app.world_mut().flush();
+
+        // Mutate the transform
+        {
+            let mut transform = app.world_mut().get_mut::<Transform>(entity).unwrap();
+            transform.translation = Vec3::new(100.0, 200.0, 300.0);
+        }
+        
+        // Ensure FixedUpdate runs again
+        let _ = app.world_mut().run_system_once(apply_user_transforms);
+        // Step physics manually so get_transform returns the updated value if needed
+        // Actually set_position_and_rotation updates Jolt immediately.
+
+
+        let physics_world = app.world().get_resource::<PhysicsWorld>().unwrap();
+        let jolt_body = app.world().get::<JoltBody>(entity).unwrap();
+        
+        let (pos, _) = physics_world.get_transform(jolt_body.0).unwrap();
+        assert!(pos.distance(Vec3::new(100.0, 200.0, 300.0)) < 1e-4);
+    }
 
     #[test]
     fn test_spawn_physics_bodies_failure() {

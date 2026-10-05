@@ -212,6 +212,41 @@ impl PhysicsWorld {
         }
     }
 
+    /// Teleports the body to a new position and rotation, forcefully waking it up.
+    pub fn set_position_and_rotation(
+        &mut self,
+        body_id: rolt::BodyId,
+        position: Vec3,
+        rotation: Quat,
+    ) {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+            return;
+        }
+        // SAFETY: body_id is valid and registered.
+        unsafe {
+            let body_interface = self.body_interface();
+            let pos = joltc_sys::JPC_Vec3 {
+                x: position.x,
+                y: position.y,
+                z: position.z,
+                _w: 0.0,
+            };
+            let rot = joltc_sys::JPC_Quat {
+                x: rotation.x,
+                y: rotation.y,
+                z: rotation.z,
+                w: rotation.w,
+            };
+            joltc_sys::JPC_BodyInterface_SetPositionAndRotation(
+                body_interface,
+                body_id.raw(),
+                pos,
+                rot,
+                joltc_sys::JPC_ACTIVATION_ACTIVATE,
+            );
+        }
+    }
+
     /// Retrieves the current position and rotation of the body from Jolt.
     pub fn get_transform(&self, body_id: rolt::BodyId) -> Option<(Vec3, Quat)> {
         if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
@@ -510,6 +545,45 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn test_set_position_and_rotation_valid_body() {
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
+        let body_id = physics_world
+            .spawn_body(
+                Entity::PLACEHOLDER,
+                &crate::components::Collider::Box { half_extents: Vec3::splat(1.0) },
+                Vec3::ONE,
+                (Vec3::ZERO, Quat::IDENTITY),
+                &RigidBody::Dynamic,
+                Vec3::ZERO,
+                Vec3::ZERO,
+            )
+            .expect("Failed to spawn body");
+
+        let new_pos = Vec3::new(10.0, 20.0, 30.0);
+        let new_rot = Quat::from_rotation_x(std::f32::consts::PI / 2.0);
+
+        physics_world.set_position_and_rotation(body_id, new_pos, new_rot);
+
+        let (fetched_pos, fetched_rot) = physics_world.get_transform(body_id).unwrap();
+        assert!(fetched_pos.distance(new_pos) < 1e-4);
+        // Quat::angle_between requires normalized quats, and angle might be slightly off.
+        // Dot product is safe.
+        assert!((1.0 - fetched_rot.dot(new_rot).abs()) < 1e-4);
+    }
+
+    #[test]
+    fn test_set_position_and_rotation_invalid_body_noop() {
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
+        let invalid_id = rolt::BodyId::new(INVALID_BODY_ID);
+        // Should not panic or crash
+        physics_world.set_position_and_rotation(invalid_id, Vec3::ZERO, Quat::IDENTITY);
+        
+        let fake_id = rolt::BodyId::new(9999);
+        physics_world.set_position_and_rotation(fake_id, Vec3::ZERO, Quat::IDENTITY);
+    }
+
     #[test]
     fn test_spawn_static_box() {
         let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
@@ -518,7 +592,9 @@ mod tests {
 
         let result = physics_world.spawn_body(
             Entity::PLACEHOLDER,
-            &crate::components::Collider::Box { half_extents: box_size },
+            &crate::components::Collider::Box {
+                half_extents: box_size,
+            },
             Vec3::ONE,
             (Vec3::ZERO, Quat::IDENTITY),
             &rigidbody,
@@ -537,7 +613,9 @@ mod tests {
 
         let result = physics_world.spawn_body(
             Entity::PLACEHOLDER,
-            &crate::components::Collider::Box { half_extents: box_size },
+            &crate::components::Collider::Box {
+                half_extents: box_size,
+            },
             Vec3::ONE,
             (Vec3::ZERO, Quat::IDENTITY),
             &rigidbody,
@@ -556,7 +634,9 @@ mod tests {
 
         let result = physics_world.spawn_body(
             Entity::PLACEHOLDER,
-            &crate::components::Collider::Box { half_extents: box_size },
+            &crate::components::Collider::Box {
+                half_extents: box_size,
+            },
             Vec3::ONE,
             (Vec3::ZERO, Quat::IDENTITY),
             &rigidbody,
@@ -583,7 +663,9 @@ mod tests {
         let body_id = physics_world
             .spawn_body(
                 Entity::PLACEHOLDER,
-                &crate::components::Collider::Box { half_extents: Vec3::splat(1.0) },
+                &crate::components::Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
                 Vec3::ONE,
                 (Vec3::new(1.0, 2.0, 3.0), Quat::IDENTITY),
                 &RigidBody::Dynamic,
@@ -605,14 +687,16 @@ mod tests {
 
         let body_id = physics_world
             .spawn_body(
-            test_entity,
-            &crate::components::Collider::Box { half_extents: Vec3::splat(1.0) },
-            Vec3::ONE,
-            (Vec3::ZERO, Quat::IDENTITY),
-            &RigidBody::Dynamic,
-            Vec3::ZERO,
-            Vec3::ZERO,
-        )
+                test_entity,
+                &crate::components::Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
+                Vec3::ONE,
+                (Vec3::ZERO, Quat::IDENTITY),
+                &RigidBody::Dynamic,
+                Vec3::ZERO,
+                Vec3::ZERO,
+            )
             .expect("Failed to spawn box");
 
         let user_data = physics_world
@@ -640,14 +724,16 @@ mod tests {
 
         let body_id = physics_world
             .spawn_body(
-            Entity::PLACEHOLDER,
-            &crate::components::Collider::Box { half_extents: box_size },
-            Vec3::ONE,
-            (Vec3::ZERO, Quat::IDENTITY),
-            &rigidbody,
-            Vec3::ZERO,
-            Vec3::ZERO,
-        )
+                Entity::PLACEHOLDER,
+                &crate::components::Collider::Box {
+                    half_extents: box_size,
+                },
+                Vec3::ONE,
+                (Vec3::ZERO, Quat::IDENTITY),
+                &rigidbody,
+                Vec3::ZERO,
+                Vec3::ZERO,
+            )
             .expect("Failed to spawn box");
 
         let target_lin_vel = Vec3::new(1.0, 2.0, 3.0);
@@ -677,14 +763,16 @@ mod tests {
         // 2. Newly spawned dynamic box is active
         let body_id = physics_world
             .spawn_body(
-            Entity::PLACEHOLDER,
-            &crate::components::Collider::Box { half_extents: Vec3::splat(1.0) },
-            Vec3::ONE,
-            (Vec3::ZERO, Quat::IDENTITY),
-            &RigidBody::Dynamic,
-            Vec3::ZERO,
-            Vec3::ZERO,
-        )
+                Entity::PLACEHOLDER,
+                &crate::components::Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
+                Vec3::ONE,
+                (Vec3::ZERO, Quat::IDENTITY),
+                &RigidBody::Dynamic,
+                Vec3::ZERO,
+                Vec3::ZERO,
+            )
             .expect("Failed to spawn box");
         assert!(physics_world.is_active(body_id));
 
@@ -775,7 +863,9 @@ mod tests {
             let entity = Entity::from_raw_u32(i + 1).unwrap();
             physics_world.spawn_body(
                 entity,
-                &crate::components::Collider::Box { half_extents: Vec3::splat(1.0) },
+                &crate::components::Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
                 Vec3::ONE,
                 (Vec3::new(i as f32, 0.0, 0.0), Quat::IDENTITY),
                 &RigidBody::Dynamic,
