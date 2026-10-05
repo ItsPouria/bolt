@@ -12,7 +12,13 @@ fn main() {
         .add_plugins(ExampleStatsPlugin)
         .insert_resource(SpawnTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
         .add_systems(Startup, setup)
-        .add_systems(Update, spawn_random_boxes)
+        .add_systems(
+            Update,
+            (
+                spawn_random_boxes,
+                bolt_bevy::systems::debug_draw_colliders,
+            ),
+        )
         .run();
 }
 
@@ -58,6 +64,7 @@ fn setup(
         Collider::Box {
             half_extents: box_size / 2.0,
         },
+        bolt_bevy::components::ContinuousCollision,
     ));
 }
 
@@ -88,6 +95,7 @@ fn spawn_random_boxes(
             Collider::Box {
                 half_extents: box_size / 2.0,
             },
+            bolt_bevy::components::ContinuousCollision,
         ));
     }
 }
