@@ -496,6 +496,7 @@ fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
             z: half_extents.z,
             _w: 0.0,
         },
+        ConvexRadius: 0.05,
         ..Default::default()
     };
 
