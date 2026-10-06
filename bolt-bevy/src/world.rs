@@ -18,7 +18,7 @@ use joltc_sys::{
 };
 use rolt::PhysicsSystem;
 
-use crate::layers::{
+use bolt_core::layers::{
     OBJECT_LAYER_DYNAMIC, OBJECT_LAYER_STATIC, SimpleBroadPhaseLayer, SimpleObjectLayerPairFilter,
     SimpleObjectVsBroadPhaseLayerFilter,
 };
