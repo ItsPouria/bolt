@@ -1921,6 +1921,7 @@ name = "bolt-bevy"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bolt-core",
  "joltc-sys",
  "rolt",
 ]
@@ -1928,6 +1929,11 @@ dependencies = [
 [[package]]
 name = "bolt-core"
 version = "0.1.0"
+dependencies = [
+ "glam 0.32.1",
+ "joltc-sys",
+ "rolt",
+]
 
 [[package]]
 name = "bolt-examples"

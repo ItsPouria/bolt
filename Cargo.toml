@@ -6,4 +6,4 @@ members = ["bolt-core", "bolt-bevy", "bolt-examples"]
 rolt = { git = "https://github.com/SecondHalfGames/jolt-rust", rev = "51cd1beee6cee7384787a2bf821498d816cd4bc8" }
 bevy = "0.19.1"
 joltc-sys = { git = "https://github.com/SecondHalfGames/jolt-rust", rev = "51cd1beee6cee7384787a2bf821498d816cd4bc8" }
-
+glam = "0.32"

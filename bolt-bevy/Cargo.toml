@@ -13,3 +13,4 @@ rust-version = "1.95.0"
 bevy = { workspace = true }
 rolt = { workspace = true }
 joltc-sys = { workspace = true }
+bolt-core = { path = "../bolt-core/" }
