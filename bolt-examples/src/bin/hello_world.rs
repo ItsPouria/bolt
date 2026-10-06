@@ -17,7 +17,7 @@ fn main() {
         .add_plugins(ExampleStatsPlugin)
         .insert_resource(SpawnTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
         .add_systems(Startup, setup)
-        .add_systems(Update, spawn_random_boxes)
+        .add_systems(Update, spawn_random_shapes)
         .run();
 }
 
@@ -53,21 +53,19 @@ fn setup(
         },
     ));
 
-    // 4. The Falling Box (Dynamic)
-    let box_size = Vec3::splat(1.0);
+    // 4. The Initial Falling Sphere (Dynamic)
+    let radius = 0.5;
     commands.spawn((
-        Mesh3d(meshes.add(Cuboid::from_size(box_size))),
+        Mesh3d(meshes.add(Sphere::new(radius))),
         MeshMaterial3d(materials.add(Color::srgb(0.8, 0.2, 0.2))),
         Transform::from_xyz(0.0, 5.0, 0.0),
         RigidBody::Dynamic,
-        Collider::Box {
-            half_extents: box_size / 2.0,
-        },
+        Collider::Sphere { radius },
         bolt_bevy::components::ContinuousCollision,
     ));
 }
 
-fn spawn_random_boxes(
+fn spawn_random_shapes(
     mut commands: Commands,
     time: Res<Time>,
     mut timer: ResMut<SpawnTimer>,
@@ -75,26 +73,73 @@ fn spawn_random_boxes(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     if timer.0.tick(time.delta()).just_finished() {
-        // Generate random positions using rand::random (0.0 to 1.0)
-        let x = (rand::random::<f32>() - 0.5) * 8.0; // -4.0 to 4.0
-        let z = (rand::random::<f32>() - 0.5) * 8.0; // -4.0 to 4.0
-        let y = rand::random::<f32>() * 5.0 + 5.0; // 5.0 to 10.0
+        let x = (rand::random::<f32>() - 0.5) * 8.0;
+        let z = (rand::random::<f32>() - 0.5) * 8.0;
+        let y = rand::random::<f32>() * 5.0 + 5.0;
 
         let r = rand::random::<f32>();
         let g = rand::random::<f32>();
         let b = rand::random::<f32>();
 
-        let box_size = Vec3::splat(1.0);
+        let shape_type = rand::random::<u32>() % 4;
+        let transform = Transform::from_xyz(x, y, z);
+        let material = MeshMaterial3d(materials.add(Color::srgb(r, g, b)));
 
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::from_size(box_size))),
-            MeshMaterial3d(materials.add(Color::srgb(r, g, b))),
-            Transform::from_xyz(x, y, z),
-            RigidBody::Dynamic,
-            Collider::Box {
-                half_extents: box_size / 2.0,
-            },
-            bolt_bevy::components::ContinuousCollision,
-        ));
+        match shape_type {
+            0 => {
+                let box_size = Vec3::splat(1.0);
+                commands.spawn((
+                    Mesh3d(meshes.add(Cuboid::from_size(box_size))),
+                    material,
+                    transform,
+                    RigidBody::Dynamic,
+                    Collider::Box {
+                        half_extents: box_size / 2.0,
+                    },
+                    bolt_bevy::components::ContinuousCollision,
+                ));
+            }
+            1 => {
+                let radius = 0.5;
+                commands.spawn((
+                    Mesh3d(meshes.add(Sphere::new(radius))),
+                    material,
+                    transform,
+                    RigidBody::Dynamic,
+                    Collider::Sphere { radius },
+                    bolt_bevy::components::ContinuousCollision,
+                ));
+            }
+            2 => {
+                let radius = 0.5;
+                let half_height = 0.5;
+                commands.spawn((
+                    Mesh3d(meshes.add(Capsule3d::new(radius, half_height * 2.0))),
+                    material,
+                    transform,
+                    RigidBody::Dynamic,
+                    Collider::Capsule {
+                        half_height,
+                        radius,
+                    },
+                    bolt_bevy::components::ContinuousCollision,
+                ));
+            }
+            _ => {
+                let radius = 0.5;
+                let half_height = 0.5;
+                commands.spawn((
+                    Mesh3d(meshes.add(Cylinder::new(radius, half_height * 2.0))),
+                    material,
+                    transform,
+                    RigidBody::Dynamic,
+                    Collider::Cylinder {
+                        half_height,
+                        radius,
+                    },
+                    bolt_bevy::components::ContinuousCollision,
+                ));
+            }
+        }
     }
 }
