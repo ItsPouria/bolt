@@ -990,4 +990,82 @@ mod tests {
         };
         let _ = PhysicsWorld::new(config);
     }
+
+    // --- Sphere Tests ---
+
+    #[test]
+    fn test_create_sphere_shape_valid_radius_succeeds() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = super::create_sphere_shape(1.0);
+        assert!(shape.is_some(), "Valid radius must produce a shape");
+        let shape_ptr = shape.unwrap();
+        assert!(!shape_ptr.is_null());
+        unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
+    }
+
+    #[test]
+    fn test_create_sphere_shape_zero_radius_returns_none() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = super::create_sphere_shape(0.0);
+        assert!(shape.is_none(), "Zero radius must return None");
+    }
+
+    #[test]
+    fn test_create_sphere_shape_negative_radius_returns_none() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = super::create_sphere_shape(-1.0);
+        assert!(shape.is_none(), "Negative radius must return None");
+    }
+
+    // --- Capsule Tests ---
+
+    #[test]
+    fn test_create_capsule_shape_valid_dimensions_succeeds() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = super::create_capsule_shape(1.0, 0.5);
+        assert!(shape.is_some(), "Valid dimensions must produce a shape");
+        let shape_ptr = shape.unwrap();
+        assert!(!shape_ptr.is_null());
+        unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
+    }
+
+    #[test]
+    fn test_create_capsule_shape_zero_radius_returns_none() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = super::create_capsule_shape(1.0, 0.0);
+        assert!(shape.is_none(), "Zero radius must return None");
+    }
+
+    #[test]
+    fn test_create_capsule_shape_negative_height_returns_none() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = super::create_capsule_shape(-1.0, 0.5);
+        assert!(shape.is_none(), "Negative height must return None");
+    }
+
+    // --- Cylinder Tests ---
+
+    #[test]
+    fn test_create_cylinder_shape_valid_dimensions_succeeds() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = super::create_cylinder_shape(1.0, 0.5);
+        assert!(shape.is_some(), "Valid dimensions must produce a shape");
+        let shape_ptr = shape.unwrap();
+        assert!(!shape_ptr.is_null());
+        unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
+    }
+
+    #[test]
+    fn test_create_cylinder_shape_zero_radius_returns_none() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = super::create_cylinder_shape(1.0, 0.0);
+        assert!(shape.is_none(), "Zero radius must return None");
+    }
+
+    #[test]
+    fn test_create_cylinder_shape_negative_height_returns_none() {
+        let _world = PhysicsWorld::new(PhysicsConfig::default());
+        let shape = super::create_cylinder_shape(-1.0, 0.5);
+        assert!(shape.is_none(), "Negative height must return None");
+    }
 }
