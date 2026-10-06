@@ -499,6 +499,7 @@ fn create_sphere_shape(radius: f32) -> Option<*mut joltc_sys::JPC_Shape> {
         Radius: radius,
         ..Default::default()
     };
+    // SAFETY: We pass pointers to valid local variables that are initialized or guaranteed to be populated by the FFI call.
     unsafe {
         joltc_sys::JPC_SphereShapeSettings_Create(&settings, &mut shape, &mut err);
         crate::world::extract_jolt_error(err);
@@ -517,6 +518,7 @@ fn create_capsule_shape(half_height: f32, radius: f32) -> Option<*mut joltc_sys:
         Radius: radius,
         ..Default::default()
     };
+    // SAFETY: We pass pointers to valid local variables that are initialized or guaranteed to be populated by the FFI call.
     unsafe {
         joltc_sys::JPC_CapsuleShapeSettings_Create(&settings, &mut shape, &mut err);
         crate::world::extract_jolt_error(err);
@@ -536,6 +538,7 @@ fn create_cylinder_shape(half_height: f32, radius: f32) -> Option<*mut joltc_sys
         ConvexRadius: 0.05,
         ..Default::default()
     };
+    // SAFETY: We pass pointers to valid local variables that are initialized or guaranteed to be populated by the FFI call.
     unsafe {
         joltc_sys::JPC_CylinderShapeSettings_Create(&settings, &mut shape, &mut err);
         crate::world::extract_jolt_error(err);
@@ -919,6 +922,7 @@ mod tests {
         assert!(!shape_ptr.is_null());
         // Clean up the ref-counted shape
         // SAFETY: `shape_ptr` is a valid shape created by `create_box_shape`.
+        // SAFETY: `shape_ptr` is guaranteed to be a valid shape pointer.
         unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
     }
 
@@ -1000,6 +1004,7 @@ mod tests {
         assert!(shape.is_some(), "Valid radius must produce a shape");
         let shape_ptr = shape.unwrap();
         assert!(!shape_ptr.is_null());
+        // SAFETY: `shape_ptr` is guaranteed to be a valid shape pointer.
         unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
     }
 
@@ -1026,6 +1031,7 @@ mod tests {
         assert!(shape.is_some(), "Valid dimensions must produce a shape");
         let shape_ptr = shape.unwrap();
         assert!(!shape_ptr.is_null());
+        // SAFETY: `shape_ptr` is guaranteed to be a valid shape pointer.
         unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
     }
 
@@ -1052,6 +1058,7 @@ mod tests {
         assert!(shape.is_some(), "Valid dimensions must produce a shape");
         let shape_ptr = shape.unwrap();
         assert!(!shape_ptr.is_null());
+        // SAFETY: `shape_ptr` is guaranteed to be a valid shape pointer.
         unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
     }
 
