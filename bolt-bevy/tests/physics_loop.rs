@@ -27,13 +27,7 @@ fn test_gravity_pulls_dynamic_bodies() {
         .id();
 
     app.update();
-
-    app.world_mut()
-        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-            Duration::from_secs(1),
-        ));
-
-    app.update();
+    advance_time_safely(&mut app, Duration::from_secs(1));
 
     let transform = app.world().get::<Transform>(entity).unwrap();
 
@@ -42,6 +36,33 @@ fn test_gravity_pulls_dynamic_bodies() {
         "Box did not fall! Y is still {}",
         transform.translation.y
     );
+}
+
+/// Advances the simulation time safely by the given duration.
+///
+/// **Why use a loop instead of one big time jump?**
+/// Our physics engine runs inside Bevy's `FixedUpdate` schedule (usually 60 or 64 times per second).
+/// If you tell Bevy that exactly 1 full second passed in a single frame, `FixedUpdate` realizes it
+/// missed 60 frames and tries to run 60 physics steps back-to-back immediately to "catch up".
+///
+/// To prevent actual games from freezing if lag spikes occur, Bevy has a hardcoded "catch-up limit"
+/// (it will refuse to run more than a certain number of fixed updates in a single frame). If we jump time
+/// by too much at once, we hit that limit, and the physics simulation gets artificially truncated.
+///
+/// By looping and advancing time by 100 milliseconds per loop, we safely spoon-feed time to the engine.
+/// 100ms is about 6 fixed physics steps per `app.update()`, which easily stays under Bevy's
+/// catch-up limit, perfectly simulating the requested duration of physics!
+fn advance_time_safely(app: &mut App, total_duration: Duration) {
+    let step = std::time::Duration::from_millis(100);
+    let mut remaining = total_duration;
+
+    while remaining > std::time::Duration::ZERO {
+        let current_step = remaining.min(step);
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(current_step));
+        app.update();
+        remaining -= current_step;
+    }
 }
 
 #[test]
@@ -208,12 +229,7 @@ fn test_child_entity_dynamic_sync_transforms() {
     app.update();
 
     // 2. Advance time by 1 second to let gravity pull the child down
-    app.world_mut()
-        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-            Duration::from_secs(1),
-        ));
-
-    app.update();
+    advance_time_safely(&mut app, Duration::from_secs(1));
 
     let child_transform = app.world().get::<Transform>(child).unwrap();
 
@@ -281,15 +297,7 @@ fn test_apply_velocities_syncs_with_physics_engine() {
         .id();
 
     app.update();
-
-    // Advance time in smaller increments to avoid Bevy's FixedUpdate catch-up limits
-    for _ in 0..10 {
-        app.world_mut()
-            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-                std::time::Duration::from_millis(100),
-            ));
-        app.update();
-    }
+    advance_time_safely(&mut app, std::time::Duration::from_secs(1));
 
     let transform = app.world().get::<Transform>(entity).unwrap();
 
@@ -313,15 +321,7 @@ fn test_sphere_dynamic_body_falls() {
         .id();
 
     app.update();
-
-    // Advance time by 1 second to let gravity pull the child down in smaller increments to avoid catch up limit
-    for _ in 0..10 {
-        app.world_mut()
-            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-                std::time::Duration::from_millis(100),
-            ));
-        app.update();
-    }
+    advance_time_safely(&mut app, std::time::Duration::from_secs(1));
 
     let transform = app.world().get::<Transform>(entity).unwrap();
     assert!(
@@ -346,14 +346,7 @@ fn test_capsule_dynamic_body_falls() {
         .id();
 
     app.update();
-
-    for _ in 0..10 {
-        app.world_mut()
-            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-                std::time::Duration::from_millis(100),
-            ));
-        app.update();
-    }
+    advance_time_safely(&mut app, std::time::Duration::from_secs(1));
 
     let transform = app.world().get::<Transform>(entity).unwrap();
     assert!(
@@ -378,14 +371,7 @@ fn test_cylinder_dynamic_body_falls() {
         .id();
 
     app.update();
-
-    for _ in 0..10 {
-        app.world_mut()
-            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-                std::time::Duration::from_millis(100),
-            ));
-        app.update();
-    }
+    advance_time_safely(&mut app, std::time::Duration::from_secs(1));
 
     let transform = app.world().get::<Transform>(entity).unwrap();
     assert!(
