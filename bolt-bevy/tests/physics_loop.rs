@@ -299,3 +299,97 @@ fn test_apply_velocities_syncs_with_physics_engine() {
         transform.translation.y
     );
 }
+
+#[test]
+fn test_sphere_dynamic_body_falls() {
+    let mut app = physics_test_app();
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Sphere { radius: 1.0 },
+        ))
+        .id();
+
+    app.update();
+
+    // Advance time by 1 second to let gravity pull the child down in smaller increments to avoid catch up limit
+    for _ in 0..10 {
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(100),
+            ));
+        app.update();
+    }
+
+    let transform = app.world().get::<Transform>(entity).unwrap();
+    assert!(
+        transform.translation.y < 10.0,
+        "Sphere did not fall! Jolt physics body may not have been created."
+    );
+}
+
+#[test]
+fn test_capsule_dynamic_body_falls() {
+    let mut app = physics_test_app();
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Capsule {
+                half_height: 1.0,
+                radius: 0.5,
+            },
+        ))
+        .id();
+
+    app.update();
+
+    for _ in 0..10 {
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(100),
+            ));
+        app.update();
+    }
+
+    let transform = app.world().get::<Transform>(entity).unwrap();
+    assert!(
+        transform.translation.y < 10.0,
+        "Capsule did not fall! Jolt physics body may not have been created."
+    );
+}
+
+#[test]
+fn test_cylinder_dynamic_body_falls() {
+    let mut app = physics_test_app();
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Cylinder {
+                half_height: 1.0,
+                radius: 0.5,
+            },
+        ))
+        .id();
+
+    app.update();
+
+    for _ in 0..10 {
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(100),
+            ));
+        app.update();
+    }
+
+    let transform = app.world().get::<Transform>(entity).unwrap();
+    assert!(
+        transform.translation.y < 10.0,
+        "Cylinder did not fall! Jolt physics body may not have been created."
+    );
+}
