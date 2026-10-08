@@ -1,8 +1,7 @@
 use crate::components::{Collider, RigidBody};
 use crate::config::PhysicsConfig;
+use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
-use std::sync::Once;
-use std::{mem::ManuallyDrop, ptr};
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::resource::Resource;
@@ -10,11 +9,9 @@ use bevy::ecs::world::{FromWorld, World};
 use bevy::log::error;
 use bevy::math::{Quat, Vec3};
 use joltc_sys::{
-    JPC_BoxShapeSettings, JPC_BoxShapeSettings_Create, JPC_FactoryInit, JPC_JobSystemThreadPool,
-    JPC_JobSystemThreadPool_delete, JPC_JobSystemThreadPool_new3, JPC_MAX_PHYSICS_BARRIERS,
-    JPC_MAX_PHYSICS_JOBS, JPC_PhysicsSystem_SetGravity, JPC_RegisterDefaultAllocator,
-    JPC_RegisterTypes, JPC_Shape, JPC_String, JPC_TempAllocatorImpl, JPC_TempAllocatorImpl_delete,
-    JPC_TempAllocatorImpl_new, JPC_Vec3,
+    JPC_JobSystemThreadPool, JPC_JobSystemThreadPool_delete, JPC_JobSystemThreadPool_new3,
+    JPC_MAX_PHYSICS_BARRIERS, JPC_MAX_PHYSICS_JOBS, JPC_PhysicsSystem_SetGravity,
+    JPC_TempAllocatorImpl, JPC_TempAllocatorImpl_delete, JPC_TempAllocatorImpl_new, JPC_Vec3,
 };
 use rolt::PhysicsSystem;
 
@@ -23,7 +20,6 @@ use bolt_core::layers::{
     SimpleObjectVsBroadPhaseLayerFilter,
 };
 
-static JOLT_INIT: Once = Once::new();
 /// Constant representing an invalid or unallocated Jolt body ID (0xFFFFFFFF).
 pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
 
@@ -42,14 +38,7 @@ pub struct PhysicsWorld {
 impl PhysicsWorld {
     /// Creates a new physics world with default settings.
     pub fn new(config: PhysicsConfig) -> Self {
-        // Initialize the Jolt core. This is required before any Jolt objects can be created.
-        JOLT_INIT.call_once(||
-        // SAFETY: Initializing the Jolt C-API is safe to call exactly once globally.
-        unsafe {
-            JPC_RegisterDefaultAllocator();
-            JPC_FactoryInit();
-            JPC_RegisterTypes();
-        });
+        bolt_core::init::ensure_jolt_initialized();
 
         let mut physics_system = PhysicsSystem::new();
 
@@ -120,16 +109,26 @@ impl PhysicsWorld {
     ) -> Option<rolt::BodyId> {
         let (position, rotation) = transform;
         let shape_ptr = match collider {
-            Collider::Box { half_extents } => create_box_shape(*half_extents * scale)?,
-            Collider::Sphere { radius } => create_sphere_shape(radius * scale.max_element())?,
+            Collider::Box { half_extents } => {
+                bolt_core::shapes::create_box_shape(*half_extents * scale)?
+            }
+            Collider::Sphere { radius } => {
+                bolt_core::shapes::create_sphere_shape(radius * scale.max_element())?
+            }
             Collider::Capsule {
                 half_height,
                 radius,
-            } => create_capsule_shape(half_height * scale.y, radius * scale.x.max(scale.z))?,
+            } => bolt_core::shapes::create_capsule_shape(
+                half_height * scale.y,
+                radius * scale.x.max(scale.z),
+            )?,
             Collider::Cylinder {
                 half_height,
                 radius,
-            } => create_cylinder_shape(half_height * scale.y, radius * scale.x.max(scale.z))?,
+            } => bolt_core::shapes::create_cylinder_shape(
+                half_height * scale.y,
+                radius * scale.x.max(scale.z),
+            )?,
         };
 
         let motion_type = match rigidbody {
@@ -489,95 +488,6 @@ impl Drop for PhysicsWorld {
     }
 }
 
-fn create_sphere_shape(radius: f32) -> Option<*mut joltc_sys::JPC_Shape> {
-    if radius <= 0.0 || !radius.is_finite() {
-        return None;
-    }
-    let mut shape: *mut joltc_sys::JPC_Shape = std::ptr::null_mut();
-    let mut err: *mut joltc_sys::JPC_String = std::ptr::null_mut();
-    let settings = joltc_sys::JPC_SphereShapeSettings {
-        Radius: radius,
-        ..Default::default()
-    };
-    // SAFETY: We pass pointers to valid local variables that are initialized or guaranteed to be populated by the FFI call.
-    unsafe {
-        joltc_sys::JPC_SphereShapeSettings_Create(&settings, &mut shape, &mut err);
-        crate::world::extract_jolt_error(err);
-    }
-    if shape.is_null() { None } else { Some(shape) }
-}
-
-fn create_capsule_shape(half_height: f32, radius: f32) -> Option<*mut joltc_sys::JPC_Shape> {
-    if radius <= 0.0 || half_height < 0.0 || !radius.is_finite() || !half_height.is_finite() {
-        return None;
-    }
-    let mut shape: *mut joltc_sys::JPC_Shape = std::ptr::null_mut();
-    let mut err: *mut joltc_sys::JPC_String = std::ptr::null_mut();
-    let settings = joltc_sys::JPC_CapsuleShapeSettings {
-        HalfHeightOfCylinder: half_height,
-        Radius: radius,
-        ..Default::default()
-    };
-    // SAFETY: We pass pointers to valid local variables that are initialized or guaranteed to be populated by the FFI call.
-    unsafe {
-        joltc_sys::JPC_CapsuleShapeSettings_Create(&settings, &mut shape, &mut err);
-        crate::world::extract_jolt_error(err);
-    }
-    if shape.is_null() { None } else { Some(shape) }
-}
-
-fn create_cylinder_shape(half_height: f32, radius: f32) -> Option<*mut joltc_sys::JPC_Shape> {
-    if radius <= 0.0 || half_height <= 0.0 || !radius.is_finite() || !half_height.is_finite() {
-        return None;
-    }
-    let mut shape: *mut joltc_sys::JPC_Shape = std::ptr::null_mut();
-    let mut err: *mut joltc_sys::JPC_String = std::ptr::null_mut();
-    let settings = joltc_sys::JPC_CylinderShapeSettings {
-        HalfHeight: half_height,
-        Radius: radius,
-        ConvexRadius: 0.05,
-        ..Default::default()
-    };
-    // SAFETY: We pass pointers to valid local variables that are initialized or guaranteed to be populated by the FFI call.
-    unsafe {
-        joltc_sys::JPC_CylinderShapeSettings_Create(&settings, &mut shape, &mut err);
-        crate::world::extract_jolt_error(err);
-    }
-    if shape.is_null() { None } else { Some(shape) }
-}
-
-fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
-    if !half_extents.is_finite() || half_extents.min_element() <= 0.0 {
-        error!("Invalid box half_extents: {}", half_extents);
-        return None;
-    }
-
-    let mut shape: *mut JPC_Shape = ptr::null_mut();
-    let mut err: *mut JPC_String = ptr::null_mut();
-
-    let settings = JPC_BoxShapeSettings {
-        HalfExtent: JPC_Vec3 {
-            x: half_extents.x,
-            y: half_extents.y,
-            z: half_extents.z,
-            _w: 0.0,
-        },
-        ConvexRadius: 0.05,
-        ..Default::default()
-    };
-
-    // SAFETY: FFI call to create a box shape with valid settings.
-    unsafe {
-        if JPC_BoxShapeSettings_Create(&settings, &mut shape, &mut err) {
-            Some(shape)
-        } else {
-            let error_msg = extract_jolt_error(err);
-            error!("Failed to create box shape: {error_msg}");
-            None
-        }
-    }
-}
-
 // SAFETY: The Jolt `PhysicsSystem` is designed for multi-threaded access.
 // SAFETY: The Jolt `PhysicsSystem` and `BodyInterface` are internally synchronized
 // via mutexes (num_body_mutexes). We enforce that `PhysicsWorld` only exposes
@@ -586,24 +496,6 @@ fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
 unsafe impl Send for PhysicsWorld {}
 // SAFETY: See Send justification. Jolt's C++ locks make `&self` reads safe across threads.
 unsafe impl Sync for PhysicsWorld {}
-
-/// Safely extracts Jolt's FFI error string into a Rust String and deletes the C++ allocation.
-///
-/// # Safety
-/// If `err` is non-null, it must point to a valid `JPC_String` allocated by Jolt.
-unsafe fn extract_jolt_error(err: *mut joltc_sys::JPC_String) -> String {
-    if err.is_null() {
-        return "unknown Jolt error".to_string();
-    }
-
-    // SAFETY: The caller guarantees `err` is a valid `JPC_String`. We extract the string and delete the allocation.
-    unsafe {
-        let c_str = std::ffi::CStr::from_ptr(joltc_sys::JPC_String_c_str(err));
-        let message = c_str.to_string_lossy().into_owned();
-        joltc_sys::JPC_String_delete(err);
-        message
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -867,80 +759,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_jolt_error_handles_null_pointer_gracefully() {
-        // SAFETY: Testing graceful null handling
-        let message = unsafe { extract_jolt_error(std::ptr::null_mut()) };
-        assert_eq!(message, "unknown Jolt error");
-    }
-
-    #[test]
-    fn test_extract_jolt_error_extracts_and_frees_real_jolt_string() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let mut shape: *mut joltc_sys::JPC_Shape = std::ptr::null_mut();
-        let mut err: *mut joltc_sys::JPC_String = std::ptr::null_mut();
-
-        let settings = joltc_sys::JPC_BoxShapeSettings {
-            HalfExtent: joltc_sys::JPC_Vec3 {
-                x: -1.0,
-                y: -1.0,
-                z: -1.0,
-                _w: 0.0,
-            },
-            ..Default::default()
-        };
-
-        // Trigger Jolt C++ to allocate an actual JPC_String error
-        // SAFETY: `settings` is initialized, and `shape`/`err` are valid output pointers.
-        let success =
-            unsafe { joltc_sys::JPC_BoxShapeSettings_Create(&settings, &mut shape, &mut err) };
-        assert!(!success, "Shape creation must fail for negative extents");
-        assert!(
-            !err.is_null(),
-            "Jolt must allocate an error string on failure"
-        );
-
-        // SAFETY: err is a valid JPC_String allocated by Jolt.
-        // Verifies conversion to Rust String AND that JPC_String_delete succeeds without crash.
-        let error_message = unsafe { extract_jolt_error(err) };
-        assert!(
-            !error_message.is_empty(),
-            "Error message should not be empty"
-        );
-        assert_ne!(
-            error_message, "unknown Jolt error",
-            "Should contain actual Jolt error details"
-        );
-    }
-
-    #[test]
-    fn test_create_box_shape_valid_extents_succeeds() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = create_box_shape(Vec3::splat(1.0));
-        assert!(shape.is_some(), "Valid half-extents must produce a shape");
-
-        let shape_ptr = shape.unwrap();
-        assert!(!shape_ptr.is_null());
-        // Clean up the ref-counted shape
-        // SAFETY: `shape_ptr` is a valid shape created by `create_box_shape`.
-        // SAFETY: `shape_ptr` is guaranteed to be a valid shape pointer.
-        unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
-    }
-
-    #[test]
-    fn test_create_box_shape_negative_extents_returns_none() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = create_box_shape(Vec3::splat(-1.0));
-        assert!(shape.is_none(), "Negative half-extents must return None");
-    }
-
-    #[test]
-    fn test_create_box_shape_zero_extents_returns_none() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = create_box_shape(Vec3::ZERO);
-        assert!(shape.is_none(), "Zero half-extents must return None");
-    }
-
-    #[test]
     fn test_physics_world_drop_destroys_live_bodies_cleanly() {
         let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
 
@@ -993,86 +811,5 @@ mod tests {
             ..Default::default()
         };
         let _ = PhysicsWorld::new(config);
-    }
-
-    // --- Sphere Tests ---
-
-    #[test]
-    fn test_create_sphere_shape_valid_radius_succeeds() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = super::create_sphere_shape(1.0);
-        assert!(shape.is_some(), "Valid radius must produce a shape");
-        let shape_ptr = shape.unwrap();
-        assert!(!shape_ptr.is_null());
-        // SAFETY: `shape_ptr` is guaranteed to be a valid shape pointer.
-        unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
-    }
-
-    #[test]
-    fn test_create_sphere_shape_zero_radius_returns_none() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = super::create_sphere_shape(0.0);
-        assert!(shape.is_none(), "Zero radius must return None");
-    }
-
-    #[test]
-    fn test_create_sphere_shape_negative_radius_returns_none() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = super::create_sphere_shape(-1.0);
-        assert!(shape.is_none(), "Negative radius must return None");
-    }
-
-    // --- Capsule Tests ---
-
-    #[test]
-    fn test_create_capsule_shape_valid_dimensions_succeeds() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = super::create_capsule_shape(1.0, 0.5);
-        assert!(shape.is_some(), "Valid dimensions must produce a shape");
-        let shape_ptr = shape.unwrap();
-        assert!(!shape_ptr.is_null());
-        // SAFETY: `shape_ptr` is guaranteed to be a valid shape pointer.
-        unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
-    }
-
-    #[test]
-    fn test_create_capsule_shape_zero_radius_returns_none() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = super::create_capsule_shape(1.0, 0.0);
-        assert!(shape.is_none(), "Zero radius must return None");
-    }
-
-    #[test]
-    fn test_create_capsule_shape_negative_height_returns_none() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = super::create_capsule_shape(-1.0, 0.5);
-        assert!(shape.is_none(), "Negative height must return None");
-    }
-
-    // --- Cylinder Tests ---
-
-    #[test]
-    fn test_create_cylinder_shape_valid_dimensions_succeeds() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = super::create_cylinder_shape(1.0, 0.5);
-        assert!(shape.is_some(), "Valid dimensions must produce a shape");
-        let shape_ptr = shape.unwrap();
-        assert!(!shape_ptr.is_null());
-        // SAFETY: `shape_ptr` is guaranteed to be a valid shape pointer.
-        unsafe { joltc_sys::JPC_Shape_Release(shape_ptr) };
-    }
-
-    #[test]
-    fn test_create_cylinder_shape_zero_radius_returns_none() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = super::create_cylinder_shape(1.0, 0.0);
-        assert!(shape.is_none(), "Zero radius must return None");
-    }
-
-    #[test]
-    fn test_create_cylinder_shape_negative_height_returns_none() {
-        let _world = PhysicsWorld::new(PhysicsConfig::default());
-        let shape = super::create_cylinder_shape(-1.0, 0.5);
-        assert!(shape.is_none(), "Negative height must return None");
     }
 }

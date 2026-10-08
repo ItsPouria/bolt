@@ -6,4 +6,11 @@
 
 #![warn(missing_docs)]
 
+/// One-time global initialization of the Jolt C++ runtime.
+pub mod init;
+
+/// Collision layer definitions and broad-phase/object-layer pair filters.
 pub mod layers;
+
+/// Validating factory functions for Jolt collision shapes.
+pub mod shapes;
