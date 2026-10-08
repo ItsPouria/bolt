@@ -14,3 +14,6 @@ pub mod layers;
 
 /// Validating factory functions for Jolt collision shapes.
 pub mod shapes;
+
+/// The engine-agnostic Jolt physics world and its construction vocabulary.
+pub mod world;
