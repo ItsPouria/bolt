@@ -7,7 +7,6 @@
 //! [`WorldConfig`](world::WorldConfig), [`BodyType`](world::BodyType), and
 //! [`BodySpawn`](world::BodySpawn).
 
-use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 
@@ -26,6 +25,11 @@ use rolt::{BodyId, PhysicsSystem};
 
 /// Constant representing an invalid or unallocated Jolt body ID (0xFFFFFFFF).
 pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
+
+/// Jolt packs a body ID as a 23-bit index plus an 8-bit sequence number
+/// (`BodyID.h`: `cMaxBodyIndex = 0x7fffff`, shift 23). The index addresses
+/// the slot tables; the sequence detects stale handles.
+const BODY_INDEX_MASK: u32 = 0x007f_ffff;
 
 /// Runtime parameters for constructing a [`PhysicsWorld`].
 ///
@@ -121,13 +125,33 @@ pub struct BodySpawn {
     pub use_ccd: bool,
 }
 
-/// The Jolt physics world: owns the `PhysicsSystem`, the temporary allocator,
-/// and the job system required to step the simulation.
+/// The Jolt physics world: owns the `PhysicsSystem`, its allocators and
+/// worker threads, and the slot-table bookkeeping for validated body access.
 pub struct PhysicsWorld {
+    /// The Jolt physics system: bodies, broadphase, and solver.
+    ///
+    /// Wrapped in [`ManuallyDrop`] because destructor timing is
+    /// load-bearing — it must run after the body cleanup in [`Drop`] and
+    /// *before* the C++ allocator deletions, so [`Drop`] triggers it
+    /// manually instead of relying on implicit field-drop order.
     physics_system: ManuallyDrop<PhysicsSystem>,
+    /// Jolt's temporary (scratch) allocator, consumed during each `update`.
+    ///
+    /// An owned C++ allocation held as a guaranteed-non-null pointer; freed
+    /// in [`Drop`], after the physics system.
     temp_allocator: NonNull<JPC_TempAllocatorImpl>,
+    /// Jolt's worker thread pool, executing simulation jobs across cores.
+    ///
+    /// An owned C++ allocation held as a guaranteed-non-null pointer; freed
+    /// in [`Drop`], after the physics system.
     job_system: NonNull<JPC_JobSystemThreadPool>,
-    body_registry: HashMap<BodyId, u64>,
+    /// Dense slot table: body index → full raw `BodyID` (index + generation).
+    /// A slot is free if it holds [`INVALID_BODY_ID`]. Sized to `max_bodies`
+    /// at construction (~40 KB at the default), so hot-path validation is a
+    /// masked compare on contiguous memory instead of a hash lookup.
+    slots: Vec<u32>,
+    /// Dense table: body index → the `user_data` payload stored in Jolt.
+    user_data: Vec<u64>,
 }
 
 impl PhysicsWorld {
@@ -173,7 +197,8 @@ impl PhysicsWorld {
             physics_system: ManuallyDrop::new(physics_system),
             temp_allocator,
             job_system,
-            body_registry: HashMap::new(),
+            slots: vec![INVALID_BODY_ID; config.max_bodies as usize],
+            user_data: vec![0; config.max_bodies as usize],
         }
     }
 
@@ -182,7 +207,7 @@ impl PhysicsWorld {
     /// This is an escape hatch for Jolt capabilities `bolt-core` does not yet
     /// wrap — narrow-phase queries, contact listeners, constraints — reachable
     /// through the safe `rolt` API. Prefer the methods on [`PhysicsWorld`]
-    /// where available: they validate body IDs against the registry before
+    /// where available: they validate body IDs against the slot table before
     /// touching Jolt state, while anything done through this reference is the
     /// caller's responsibility.
     ///
@@ -198,6 +223,26 @@ impl PhysicsWorld {
     unsafe fn body_interface(&self) -> *mut joltc_sys::JPC_BodyInterface {
         // SAFETY: The raw pointer from `physics_system` is valid.
         unsafe { joltc_sys::JPC_PhysicsSystem_GetBodyInterface(self.physics_system.raw()) }
+    }
+
+    /// Validates a body ID against the slot table in O(1), without hashing.
+    ///
+    /// Compares the full raw ID — index *and* generation — so a stale handle
+    /// to a destroyed-and-recycled slot is rejected.
+    ///
+    /// The explicit [`INVALID_BODY_ID`] check looks redundant: its index
+    /// (8,388,607) sits far beyond any sane `max_bodies`. But if a world
+    /// were ever configured with more slots than Jolt's own `cMaxBodyIndex`,
+    /// that slot could exist and hold a matching value — validating the
+    /// invalid ID. Defensive completeness costs one compare.
+    #[inline]
+    fn is_valid(&self, body_id: BodyId) -> bool {
+        let raw = body_id.raw();
+        if raw == INVALID_BODY_ID {
+            return false;
+        }
+        let index = (raw & BODY_INDEX_MASK) as usize;
+        index < self.slots.len() && self.slots[index] == raw
     }
 
     /// Advances the physics simulation by `delta_time`, performing `collision_steps` substeps.
@@ -320,9 +365,15 @@ impl PhysicsWorld {
         if body_id == INVALID_BODY_ID {
             return None;
         }
-        let id = BodyId::new(body_id);
-        self.body_registry.insert(id, spawn.user_data);
-        Some(id)
+        let index = (body_id & BODY_INDEX_MASK) as usize;
+        if index >= self.slots.len() {
+            // Jolt handed out an index beyond our `max_bodies`; only possible
+            // if the world was init'd with a different capacity than ours.
+            return None;
+        }
+        self.slots[index] = body_id;
+        self.user_data[index] = spawn.user_data;
+        Some(BodyId::new(body_id))
     }
 
     /// Returns whether the body with the given ID is active (awake and
@@ -330,10 +381,11 @@ impl PhysicsWorld {
     ///
     /// Unknown, invalid, or already-destroyed IDs report `false`.
     pub fn is_active(&self, body_id: BodyId) -> bool {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+        if !self.is_valid(body_id) {
             return false;
         }
-        // SAFETY: The body ID is registered in body_registry and confirmed added before querying.
+        // SAFETY: The body ID occupies a live slot (verified by `is_valid`)
+        // and is confirmed added before querying.
         unsafe {
             let body_interface = self.body_interface();
             if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
@@ -348,7 +400,7 @@ impl PhysicsWorld {
     ///
     /// Unknown or destroyed IDs are ignored.
     pub fn set_position_and_rotation(&mut self, body_id: BodyId, position: Vec3, rotation: Quat) {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+        if !self.is_valid(body_id) {
             return;
         }
         // SAFETY: body_id is valid and registered.
@@ -380,7 +432,7 @@ impl PhysicsWorld {
     ///
     /// Returns `None` for unknown or already-destroyed IDs.
     pub fn get_transform(&self, body_id: BodyId) -> Option<(Vec3, Quat)> {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+        if !self.is_valid(body_id) {
             return None;
         }
         // SAFETY: body_id is verified to be valid and allocated in this PhysicsWorld.
@@ -422,7 +474,7 @@ impl PhysicsWorld {
     ///
     /// Returns `None` for unknown or already-destroyed IDs.
     pub fn get_linear_velocity(&self, body_id: BodyId) -> Option<Vec3> {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+        if !self.is_valid(body_id) {
             return None;
         }
         // SAFETY: We verify the body ID is valid and added before querying its state.
@@ -444,7 +496,7 @@ impl PhysicsWorld {
     ///
     /// Returns `None` for unknown or already-destroyed IDs.
     pub fn get_angular_velocity(&self, body_id: BodyId) -> Option<Vec3> {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+        if !self.is_valid(body_id) {
             return None;
         }
         // SAFETY: We verify the body ID is valid and added before querying its state.
@@ -466,7 +518,7 @@ impl PhysicsWorld {
     ///
     /// Unknown or already-destroyed IDs are ignored.
     pub fn set_linear_velocity(&mut self, body_id: BodyId, linear_velocity: Vec3) {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+        if !self.is_valid(body_id) {
             return;
         }
         // SAFETY: We verify the body ID is valid and added before mutating its state.
@@ -492,7 +544,7 @@ impl PhysicsWorld {
     ///
     /// Unknown or already-destroyed IDs are ignored.
     pub fn set_angular_velocity(&mut self, body_id: BodyId, angular_velocity: Vec3) {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+        if !self.is_valid(body_id) {
             return;
         }
         // SAFETY: We verify the body ID is valid and added before mutating its state.
@@ -523,16 +575,13 @@ impl PhysicsWorld {
     /// Returns whether a registered body was destroyed; unknown or
     /// already-destroyed IDs return `false` without side effects.
     pub fn destroy_body(&mut self, body_id: BodyId) -> bool {
-        if body_id.raw() == INVALID_BODY_ID {
+        if !self.is_valid(body_id) {
             return false;
         }
+        let index = (body_id.raw() & BODY_INDEX_MASK) as usize;
 
-        if self.body_registry.remove(&body_id).is_none() {
-            return false;
-        }
-
-        // SAFETY: The body ID is valid because we only destroy it if it exists in our body_registry,
-        // which guarantees it was allocated by this PhysicsWorld and has not yet been destroyed.
+        // SAFETY: `is_valid` guarantees the ID occupies a live slot — a body
+        // allocated by this PhysicsWorld that has not yet been destroyed.
         unsafe {
             let body_interface = self.body_interface();
             if joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
@@ -540,20 +589,27 @@ impl PhysicsWorld {
             }
             joltc_sys::JPC_BodyInterface_DestroyBody(body_interface, body_id.raw());
         }
+
+        self.slots[index] = INVALID_BODY_ID;
+        self.user_data[index] = 0;
         true
     }
 }
 
 impl Drop for PhysicsWorld {
     fn drop(&mut self) {
-        //SAFETY: Clean up all live bodies before tearing down the physics system.
+        // SAFETY: Clean up all live bodies before tearing down the physics
+        // system; every non-invalid slot holds a body this world allocated.
         unsafe {
             let body_interface = self.body_interface();
-            for (body_id, _) in self.body_registry.drain() {
-                if joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
-                    joltc_sys::JPC_BodyInterface_RemoveBody(body_interface, body_id.raw());
+            for &raw in &self.slots {
+                if raw == INVALID_BODY_ID {
+                    continue;
                 }
-                joltc_sys::JPC_BodyInterface_DestroyBody(body_interface, body_id.raw());
+                if joltc_sys::JPC_BodyInterface_IsAdded(body_interface, raw) {
+                    joltc_sys::JPC_BodyInterface_RemoveBody(body_interface, raw);
+                }
+                joltc_sys::JPC_BodyInterface_DestroyBody(body_interface, raw);
             }
         }
 
@@ -756,6 +812,22 @@ mod tests {
         // 3. Destroyed body returns false
         physics_world.destroy_body(body_id);
         assert!(!physics_world.is_active(body_id));
+    }
+
+    #[test]
+    fn test_stale_generation_handle_is_invalid() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let body_id = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 0))
+            .expect("Failed to spawn box");
+        physics_world.destroy_body(body_id);
+
+        // Same index, bumped sequence number: a stale handle to a recycled
+        // slot. The slot table must reject it because the full raw ID —
+        // including the generation bits — no longer matches.
+        let stale = BodyId::new(body_id.raw() + (1 << 23));
+        assert!(!physics_world.is_active(stale));
+        assert!(physics_world.get_transform(stale).is_none());
     }
 
     #[test]
