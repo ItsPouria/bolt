@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bolt_core::shapes::ShapeSpec;
 use rolt::BodyId;
 
 /// Defines the motion type and physical behavior of a body.
@@ -64,6 +65,42 @@ pub enum Collider {
         /// The radius of the circular cross-section (in meters).
         radius: f32,
     },
+}
+
+impl Collider {
+    /// Converts this collider into an engine-agnostic [`ShapeSpec`], applying
+    /// the entity's world scale to bake final shape dimensions.
+    ///
+    /// Scaling policy (documented on each variant):
+    /// - `Box` scales each axis independently.
+    /// - `Sphere` scales uniformly by the largest scale component (true
+    ///   ellipsoids are not supported by the solver).
+    /// - `Capsule`/`Cylinder` scale height by `scale.y` and radius by the
+    ///   larger of `scale.x`/`scale.z`.
+    pub(crate) fn to_spec(&self, scale: Vec3) -> ShapeSpec {
+        match self {
+            Collider::Box { half_extents } => ShapeSpec::Box {
+                half_extents: *half_extents * scale,
+            },
+            Collider::Sphere { radius } => ShapeSpec::Sphere {
+                radius: radius * scale.max_element(),
+            },
+            Collider::Capsule {
+                half_height,
+                radius,
+            } => ShapeSpec::Capsule {
+                half_height: half_height * scale.y,
+                radius: radius * scale.x.max(scale.z),
+            },
+            Collider::Cylinder {
+                half_height,
+                radius,
+            } => ShapeSpec::Cylinder {
+                half_height: half_height * scale.y,
+                radius: radius * scale.x.max(scale.z),
+            },
+        }
+    }
 }
 
 /// A component attached to Bevy entities that have a live Jolt Physics body.

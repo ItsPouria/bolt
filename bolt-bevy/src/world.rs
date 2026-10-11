@@ -1,100 +1,53 @@
-use crate::components::{Collider, RigidBody};
-use crate::config::PhysicsConfig;
-use std::mem::ManuallyDrop;
-use std::ptr::NonNull;
+//! The Bevy resource wrapper around `bolt-core`'s physics world.
+//!
+//! This type is the ECS host: it implements [`Resource`] so Bevy can store
+//! the world, converts Bevy component data into `bolt-core`'s engine-agnostic
+//! vocabulary at the boundary, and delegates all simulation work to the
+//! wrapped [`CorePhysicsWorld`].
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::world::{FromWorld, World};
 use bevy::log::error;
 use bevy::math::{Quat, Vec3};
-use joltc_sys::{
-    JPC_JobSystemThreadPool, JPC_JobSystemThreadPool_delete, JPC_JobSystemThreadPool_new3,
-    JPC_MAX_PHYSICS_BARRIERS, JPC_MAX_PHYSICS_JOBS, JPC_PhysicsSystem_SetGravity,
-    JPC_TempAllocatorImpl, JPC_TempAllocatorImpl_delete, JPC_TempAllocatorImpl_new, JPC_Vec3,
-};
-use rolt::PhysicsSystem;
+use bolt_core::world::{BodySpawn, BodyType, PhysicsWorld as CorePhysicsWorld, WorldConfig};
+use rolt::BodyId;
 
-use bolt_core::layers::{
-    OBJECT_LAYER_DYNAMIC, OBJECT_LAYER_STATIC, SimpleBroadPhaseLayer, SimpleObjectLayerPairFilter,
-    SimpleObjectVsBroadPhaseLayerFilter,
-};
+use crate::components::{Collider, RigidBody};
+use crate::config::PhysicsConfig;
 
-/// Constant representing an invalid or unallocated Jolt body ID (0xFFFFFFFF).
-pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
-
-/// The core Bevy resource representing the Jolt physics world.
+/// The Bevy resource hosting the Jolt physics world.
 ///
-/// This struct owns the Jolt `PhysicsSystem` as well as the temporary allocator
-/// and job system required to step the simulation.
+/// See the [crate-level docs](crate) and [`CorePhysicsWorld`] for the
+/// underlying engine-agnostic implementation.
 #[derive(Resource)]
-pub struct PhysicsWorld {
-    physics_system: ManuallyDrop<PhysicsSystem>,
-    temp_allocator: NonNull<JPC_TempAllocatorImpl>,
-    job_system: NonNull<JPC_JobSystemThreadPool>,
-    body_registry: std::collections::HashMap<rolt::BodyId, Entity>,
+pub struct PhysicsWorld(pub(crate) CorePhysicsWorld);
+
+impl From<&PhysicsConfig> for WorldConfig {
+    fn from(config: &PhysicsConfig) -> Self {
+        Self {
+            max_bodies: config.max_bodies,
+            max_body_pairs: config.max_body_pairs,
+            max_contact_constraints: config.max_contact_constraints,
+            num_threads: config.num_threads,
+            temp_allocator_size_mb: config.temp_allocator_size_mb,
+        }
+    }
 }
 
 impl PhysicsWorld {
-    /// Creates a new physics world with default settings.
+    /// Creates a new physics world resource from the given configuration.
     pub fn new(config: PhysicsConfig) -> Self {
-        bolt_core::init::ensure_jolt_initialized();
-
-        let mut physics_system = PhysicsSystem::new();
-
-        physics_system.init(
-            config.max_bodies,
-            0, // num_body_mutexes (0 = default) calculated automatically by Jolt
-            config.max_body_pairs,
-            config.max_contact_constraints,
-            SimpleBroadPhaseLayer,
-            SimpleObjectVsBroadPhaseLayerFilter,
-            SimpleObjectLayerPairFilter,
-        );
-
-        let temp_allocator_bytes = config
-            .temp_allocator_size_mb
-            .checked_mul(1024 * 1024)
-            .expect("temp_allocator_size_mb in bytes overflows u32");
-
-        // SAFETY: 10MB is a valid size for the Jolt temp allocator.
-        let temp_allocator_ptr = unsafe { JPC_TempAllocatorImpl_new(temp_allocator_bytes) };
-        let temp_allocator = NonNull::new(temp_allocator_ptr)
-            .expect("Failed to allocate Jolt TempAllocator: Out of memory");
-        // SAFETY: Thread counts and max jobs constants are valid parameters for Jolt.
-        let job_system_ptr = unsafe {
-            JPC_JobSystemThreadPool_new3(
-                JPC_MAX_PHYSICS_JOBS as u32,
-                JPC_MAX_PHYSICS_BARRIERS as u32,
-                config.num_threads,
-            )
-        };
-        let job_system =
-            NonNull::new(job_system_ptr).expect("Failed to allocate Jolt JobSystem: Out of memory");
-
-        Self {
-            physics_system: ManuallyDrop::new(physics_system),
-            temp_allocator,
-            job_system,
-            body_registry: std::collections::HashMap::new(),
-        }
+        Self(CorePhysicsWorld::new(WorldConfig::from(&config)))
     }
 
-    /// Physics System.
-    pub fn physics_system(&self) -> &PhysicsSystem {
-        &self.physics_system
-    }
-
-    /// Helper to get the Jolt BodyInterface.
+    /// Spawns a Jolt body for the given entity and returns its ID.
     ///
-    /// # Safety
-    /// The caller must ensure that the `PhysicsSystem` is still valid.
-    unsafe fn body_interface(&self) -> *mut joltc_sys::JPC_BodyInterface {
-        // SAFETY: The raw pointer from `physics_system` is valid.
-        unsafe { joltc_sys::JPC_PhysicsSystem_GetBodyInterface(self.physics_system.raw()) }
-    }
-
-    /// Spawns a body into the Jolt physics world and returns its ID.
+    /// Returns `None` (and logs) if the collider's dimensions are invalid
+    /// or the world is at body capacity.
+    // Intentionally preserves the original 9-parameter signature so
+    // `systems.rs` stays untouched mid-refactor; the ergonomic parameter
+    // object (`BodySpawn`) lives in bolt-core. Revisit in the Phase 4 API pass.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_body(
         &mut self,
@@ -106,348 +59,95 @@ impl PhysicsWorld {
         linear_velocity: Vec3,
         angular_velocity: Vec3,
         use_ccd: bool,
-    ) -> Option<rolt::BodyId> {
+    ) -> Option<BodyId> {
         let (position, rotation) = transform;
-        let shape_ptr = match collider {
-            Collider::Box { half_extents } => {
-                bolt_core::shapes::create_box_shape(*half_extents * scale)?
-            }
-            Collider::Sphere { radius } => {
-                bolt_core::shapes::create_sphere_shape(radius * scale.max_element())?
-            }
-            Collider::Capsule {
-                half_height,
-                radius,
-            } => bolt_core::shapes::create_capsule_shape(
-                half_height * scale.y,
-                radius * scale.x.max(scale.z),
-            )?,
-            Collider::Cylinder {
-                half_height,
-                radius,
-            } => bolt_core::shapes::create_cylinder_shape(
-                half_height * scale.y,
-                radius * scale.x.max(scale.z),
-            )?,
+
+        let body_type = match rigidbody {
+            RigidBody::Dynamic => BodyType::Dynamic,
+            RigidBody::Static => BodyType::Static,
+            RigidBody::Kinematic => BodyType::Kinematic,
         };
 
-        let motion_type = match rigidbody {
-            RigidBody::Dynamic => joltc_sys::JPC_MOTION_TYPE_DYNAMIC,
-            RigidBody::Static => joltc_sys::JPC_MOTION_TYPE_STATIC,
-            RigidBody::Kinematic => joltc_sys::JPC_MOTION_TYPE_KINEMATIC,
+        let spawn = BodySpawn {
+            shape: collider.to_spec(scale),
+            body_type,
+            position,
+            rotation,
+            linear_velocity,
+            angular_velocity,
+            user_data: entity.to_bits(),
+            use_ccd,
         };
 
-        let motion_quality = if use_ccd && *rigidbody == RigidBody::Dynamic {
-            joltc_sys::JPC_MOTION_QUALITY_LINEAR_CAST
-        } else {
-            joltc_sys::JPC_MOTION_QUALITY_DISCRETE
-        };
-
-        let position = joltc_sys::JPC_Vec3 {
-            x: position.x,
-            y: position.y,
-            z: position.z,
-            _w: 0.0,
-        };
-
-        let rotation = joltc_sys::JPC_Quat {
-            x: rotation.x,
-            y: rotation.y,
-            z: rotation.z,
-            w: rotation.w,
-        };
-
-        let lin_vel = joltc_sys::JPC_Vec3 {
-            x: linear_velocity.x,
-            y: linear_velocity.y,
-            z: linear_velocity.z,
-            _w: 0.0,
-        };
-
-        let ang_vel = joltc_sys::JPC_Vec3 {
-            x: angular_velocity.x,
-            y: angular_velocity.y,
-            z: angular_velocity.z,
-            _w: 0.0,
-        };
-
-        let object_layer = match rigidbody {
-            RigidBody::Static => OBJECT_LAYER_STATIC.raw(),
-            RigidBody::Dynamic | RigidBody::Kinematic => OBJECT_LAYER_DYNAMIC.raw(),
-        };
-
-        let settings = joltc_sys::JPC_BodyCreationSettings {
-            Position: position,
-            Rotation: rotation,
-            MotionType: motion_type,
-            MotionQuality: motion_quality,
-            ObjectLayer: object_layer,
-            Shape: shape_ptr,
-            LinearVelocity: lin_vel,
-            AngularVelocity: ang_vel,
-            UserData: entity.to_bits(),
-            ..Default::default()
-        };
-
-        // SAFETY: settings and shape_ptr are valid, and motion types match Jolt requirements.
-        let body_id = unsafe {
-            let body_interface = self.body_interface();
-
-            let id = joltc_sys::JPC_BodyInterface_CreateAndAddBody(
-                body_interface,
-                &settings,
-                joltc_sys::JPC_ACTIVATION_ACTIVATE,
-            );
-
-            joltc_sys::JPC_Shape_Release(shape_ptr);
-
-            id
-        };
-
-        // Check for invalid body ID from Jolt (cInvalidBodyID = 0xFFFFFFFF)
-        if body_id == INVALID_BODY_ID {
-            error!("Failed to create Jolt body: body limit reached or invalid settings");
-            return None;
-        }
-        let id = rolt::BodyId::new(body_id);
-        self.body_registry.insert(id, entity);
-        Some(id)
-    }
-
-    /// Returns whether the specified body is active (awake) in the Jolt physics engine.
-    pub fn is_active(&self, body_id: rolt::BodyId) -> bool {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
-            return false;
-        }
-        // SAFETY: The body ID is registered in body_registry and confirmed added before querying.
-        unsafe {
-            let body_interface = self.body_interface();
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
-                return false;
-            }
-            joltc_sys::JPC_BodyInterface_IsActive(body_interface, body_id.raw())
-        }
-    }
-
-    /// Teleports the body to a new position and rotation, forcefully waking it up.
-    pub fn set_position_and_rotation(
-        &mut self,
-        body_id: rolt::BodyId,
-        position: Vec3,
-        rotation: Quat,
-    ) {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
-            return;
-        }
-        // SAFETY: body_id is valid and registered.
-        unsafe {
-            let body_interface = self.body_interface();
-            let pos = joltc_sys::JPC_Vec3 {
-                x: position.x,
-                y: position.y,
-                z: position.z,
-                _w: 0.0,
-            };
-            let rot = joltc_sys::JPC_Quat {
-                x: rotation.x,
-                y: rotation.y,
-                z: rotation.z,
-                w: rotation.w,
-            };
-            joltc_sys::JPC_BodyInterface_SetPositionAndRotation(
-                body_interface,
-                body_id.raw(),
-                pos,
-                rot,
-                joltc_sys::JPC_ACTIVATION_ACTIVATE,
+        let result = self.0.spawn_body(spawn);
+        if result.is_none() {
+            error!(
+                "Failed to spawn physics body for entity {:?}: invalid collider dimensions or world at capacity",
+                entity
             );
         }
+        result
     }
 
-    /// Retrieves the current position and rotation of the body from Jolt.
-    pub fn get_transform(&self, body_id: rolt::BodyId) -> Option<(Vec3, Quat)> {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
-            return None;
-        }
-        // SAFETY: body_id is verified to be valid and allocated in this PhysicsWorld.
-        unsafe {
-            let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
-                return None;
-            }
-
-            let mut pos = joltc_sys::JPC_Vec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-                _w: 0.0,
-            };
-            let mut rot = joltc_sys::JPC_Quat {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-                w: 0.0,
-            };
-
-            joltc_sys::JPC_BodyInterface_GetPositionAndRotation(
-                body_interface,
-                body_id.raw(),
-                &mut pos,
-                &mut rot,
-            );
-
-            Some((
-                Vec3::new(pos.x, pos.y, pos.z),
-                bevy::prelude::Quat::from_xyzw(rot.x, rot.y, rot.z, rot.w),
-            ))
-        }
-    }
-    /// Get Linear Velocity.
-    pub fn get_linear_velocity(&self, body_id: rolt::BodyId) -> Option<Vec3> {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
-            return None;
-        }
-        // SAFETY: We verify the body ID is valid and added before querying its state.
-        unsafe {
-            let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
-                return None;
-            }
-
-            let lin_vel =
-                joltc_sys::JPC_BodyInterface_GetLinearVelocity(body_interface, body_id.raw());
-
-            Some(Vec3::new(lin_vel.x, lin_vel.y, lin_vel.z))
-        }
-    }
-
-    /// Get Angular Velocity.
-    pub fn get_angular_velocity(&self, body_id: rolt::BodyId) -> Option<Vec3> {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
-            return None;
-        }
-        // SAFETY: We verify the body ID is valid and added before querying its state.
-        unsafe {
-            let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
-                return None;
-            }
-
-            let ang_vel =
-                joltc_sys::JPC_BodyInterface_GetAngularVelocity(body_interface, body_id.raw());
-
-            Some(Vec3::new(ang_vel.x, ang_vel.y, ang_vel.z))
-        }
-    }
-
-    /// Set Linear Velocity.
-    pub fn set_linear_velocity(&mut self, body_id: rolt::BodyId, linear_velocity: Vec3) {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
-            return;
-        }
-        // SAFETY: We verify the body ID is valid and added before mutating its state.
-        unsafe {
-            let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
-                return;
-            }
-
-            let jolt_vel = joltc_sys::JPC_Vec3 {
-                x: linear_velocity.x,
-                y: linear_velocity.y,
-                z: linear_velocity.z,
-                _w: 0.0,
-            };
-
-            joltc_sys::JPC_BodyInterface_SetLinearVelocity(body_interface, body_id.raw(), jolt_vel);
-        }
-    }
-
-    /// Set Angular Velocity.
-    pub fn set_angular_velocity(&mut self, body_id: rolt::BodyId, angular_velocity: Vec3) {
-        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
-            return;
-        }
-        // SAFETY: We verify the body ID is valid and added before mutating its state.
-        unsafe {
-            let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
-                return;
-            }
-
-            let jolt_vel = joltc_sys::JPC_Vec3 {
-                x: angular_velocity.x,
-                y: angular_velocity.y,
-                z: angular_velocity.z,
-                _w: 0.0,
-            };
-
-            joltc_sys::JPC_BodyInterface_SetAngularVelocity(
-                body_interface,
-                body_id.raw(),
-                jolt_vel,
-            );
-        }
-    }
-
-    /// Advances the physics simulation by `delta_time`, performing `collision_steps` substeps.
+    /// Advances the simulation; see [`CorePhysicsWorld::step`].
     pub fn step(&mut self, delta_time: f32, collision_steps: i32) {
-        if delta_time <= 0.0 || !delta_time.is_finite() {
-            return;
-        }
-
-        // SAFETY: physics_system, allocator, and job_system pointers are valid for the lifetime of PhysicsWorld.
-        unsafe {
-            self.physics_system.update(
-                delta_time,
-                collision_steps.max(1),
-                self.temp_allocator.as_ptr(),
-                self.job_system.as_ptr(),
-            );
-        }
+        self.0.step(delta_time, collision_steps);
     }
 
-    /// Set Gravity.
+    /// Sets global gravity; see [`CorePhysicsWorld::set_gravity`].
     pub fn set_gravity(&mut self, gravity: Vec3) {
-        // SAFETY: `physics_system.raw()` returns a valid pointer to the initialized
-        // JPC_PhysicsSystem. The JPC_Vec3 struct is correctly initialized with padding.
-        unsafe {
-            let raw_physics_system = self.physics_system.raw();
-            let gravity_vec = JPC_Vec3 {
-                x: gravity.x,
-                y: gravity.y,
-                z: gravity.z,
-                _w: 0.0,
-            };
-            JPC_PhysicsSystem_SetGravity(raw_physics_system, gravity_vec);
-        }
+        self.0.set_gravity(gravity);
     }
 
-    /// Destroys a body in Jolt if it is registered to this PhysicsWorld.
-    pub fn destroy_body(&mut self, body_id: rolt::BodyId) -> bool {
-        if body_id.raw() == INVALID_BODY_ID {
-            return false;
-        }
+    /// Returns whether the body is awake; see [`CorePhysicsWorld::is_active`].
+    pub fn is_active(&self, body_id: BodyId) -> bool {
+        self.0.is_active(body_id)
+    }
 
-        if self.body_registry.remove(&body_id).is_none() {
-            return false;
-        }
+    /// Teleports the body; see [`CorePhysicsWorld::set_position_and_rotation`].
+    pub fn set_position_and_rotation(&mut self, body_id: BodyId, position: Vec3, rotation: Quat) {
+        self.0
+            .set_position_and_rotation(body_id, position, rotation);
+    }
 
-        // SAFETY: The body ID is valid because we only destroy it if it exists in our body_registry,
-        // which guarantees it was allocated by this PhysicsWorld and has not yet been destroyed.
-        unsafe {
-            let body_interface = self.body_interface();
-            if joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
-                joltc_sys::JPC_BodyInterface_RemoveBody(body_interface, body_id.raw());
-            }
-            joltc_sys::JPC_BodyInterface_DestroyBody(body_interface, body_id.raw());
-        }
-        true
+    /// Reads the body's transform; see [`CorePhysicsWorld::get_transform`].
+    pub fn get_transform(&self, body_id: BodyId) -> Option<(Vec3, Quat)> {
+        self.0.get_transform(body_id)
+    }
+
+    /// Reads the body's linear velocity, in m/s; see
+    /// [`CorePhysicsWorld::get_linear_velocity`].
+    pub fn get_linear_velocity(&self, body_id: BodyId) -> Option<Vec3> {
+        self.0.get_linear_velocity(body_id)
+    }
+
+    /// Reads the body's angular velocity, in rad/s; see
+    /// [`CorePhysicsWorld::get_angular_velocity`].
+    pub fn get_angular_velocity(&self, body_id: BodyId) -> Option<Vec3> {
+        self.0.get_angular_velocity(body_id)
+    }
+
+    /// Writes the body's linear velocity, in m/s; see
+    /// [`CorePhysicsWorld::set_linear_velocity`].
+    pub fn set_linear_velocity(&mut self, body_id: BodyId, linear_velocity: Vec3) {
+        self.0.set_linear_velocity(body_id, linear_velocity);
+    }
+
+    /// Writes the body's angular velocity, in rad/s; see
+    /// [`CorePhysicsWorld::set_angular_velocity`].
+    pub fn set_angular_velocity(&mut self, body_id: BodyId, angular_velocity: Vec3) {
+        self.0.set_angular_velocity(body_id, angular_velocity);
+    }
+
+    /// Destroys the body; see [`CorePhysicsWorld::destroy_body`].
+    pub fn destroy_body(&mut self, body_id: BodyId) -> bool {
+        self.0.destroy_body(body_id)
+    }
+
+    /// Escape hatch to Jolt capabilities not yet wrapped; see
+    /// [`CorePhysicsWorld::physics_system`].
+    pub fn physics_system(&self) -> &rolt::PhysicsSystem {
+        self.0.physics_system()
     }
 }
 
@@ -461,182 +161,35 @@ impl FromWorld for PhysicsWorld {
     }
 }
 
-impl Drop for PhysicsWorld {
-    fn drop(&mut self) {
-        //SAFETY: Clean up all live bodies before tearing down the physics system.
-        unsafe {
-            let body_interface = self.body_interface();
-            for (body_id, _) in self.body_registry.drain() {
-                if joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
-                    joltc_sys::JPC_BodyInterface_RemoveBody(body_interface, body_id.raw());
-                }
-                joltc_sys::JPC_BodyInterface_DestroyBody(body_interface, body_id.raw());
-            }
-        }
-
-        // SAFETY: Drop ordering is critical. The `physics_system` MUST be dropped first,
-        // as Jolt internally references the job_system and temp_allocator during its shutdown.
-        unsafe {
-            ManuallyDrop::drop(&mut self.physics_system);
-        }
-
-        // SAFETY: Now that the physics system is destroyed, it is safe to delete the allocator and job system.
-        unsafe {
-            JPC_JobSystemThreadPool_delete(self.job_system.as_ptr());
-            JPC_TempAllocatorImpl_delete(self.temp_allocator.as_ptr());
-        }
-    }
-}
-
-// SAFETY: The Jolt `PhysicsSystem` is designed for multi-threaded access.
-// SAFETY: The Jolt `PhysicsSystem` and `BodyInterface` are internally synchronized
-// via mutexes (num_body_mutexes). We enforce that `PhysicsWorld` only exposes
-// Jolt state mutation through `&mut self` (exclusive access), ensuring no
-// data races can occur from the Rust side.
-unsafe impl Send for PhysicsWorld {}
-// SAFETY: See Send justification. Jolt's C++ locks make `&self` reads safe across threads.
-unsafe impl Sync for PhysicsWorld {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_physics_system_getter() {
-        let physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let system = physics_world.physics_system();
-
-        // Assert that the raw C++ pointer inside the system successfully initialized
-        assert!(
-            !system.raw().is_null(),
-            "The C++ Jolt PhysicsSystem pointer was null!"
-        );
+    fn test_physics_config_converts_to_world_config() {
+        let config = PhysicsConfig {
+            max_bodies: 100,
+            max_body_pairs: 200,
+            max_contact_constraints: 300,
+            num_threads: 4,
+            temp_allocator_size_mb: 5,
+            collision_steps: 2,
+        };
+        let world_config = WorldConfig::from(&config);
+        assert_eq!(world_config.max_bodies, 100);
+        assert_eq!(world_config.max_body_pairs, 200);
+        assert_eq!(world_config.max_contact_constraints, 300);
+        assert_eq!(world_config.num_threads, 4);
+        assert_eq!(world_config.temp_allocator_size_mb, 5);
     }
 
     #[test]
-    fn test_set_position_and_rotation_valid_body() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let body_id = physics_world
+    fn test_wrapper_spawns_and_queries_body() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let body_id = world
             .spawn_body(
                 Entity::PLACEHOLDER,
-                &crate::components::Collider::Box {
-                    half_extents: Vec3::splat(1.0),
-                },
-                Vec3::ONE,
-                (Vec3::ZERO, Quat::IDENTITY),
-                &RigidBody::Dynamic,
-                Vec3::ZERO,
-                Vec3::ZERO,
-                false,
-            )
-            .expect("Failed to spawn body");
-
-        let new_pos = Vec3::new(10.0, 20.0, 30.0);
-        let new_rot = Quat::from_rotation_x(std::f32::consts::PI / 2.0);
-
-        physics_world.set_position_and_rotation(body_id, new_pos, new_rot);
-
-        let (fetched_pos, fetched_rot) = physics_world.get_transform(body_id).unwrap();
-        assert!(fetched_pos.distance(new_pos) < 1e-4);
-        // Quat::angle_between requires normalized quats, and angle might be slightly off.
-        // Dot product is safe.
-        assert!((1.0 - fetched_rot.dot(new_rot).abs()) < 1e-4);
-    }
-
-    #[test]
-    fn test_set_position_and_rotation_invalid_body_noop() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let invalid_id = rolt::BodyId::new(INVALID_BODY_ID);
-        // Should not panic or crash
-        physics_world.set_position_and_rotation(invalid_id, Vec3::ZERO, Quat::IDENTITY);
-
-        let fake_id = rolt::BodyId::new(9999);
-        physics_world.set_position_and_rotation(fake_id, Vec3::ZERO, Quat::IDENTITY);
-    }
-
-    #[test]
-    fn test_spawn_static_box() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let rigidbody = RigidBody::Static;
-        let box_size = Vec3::splat(1.0);
-
-        let result = physics_world.spawn_body(
-            Entity::PLACEHOLDER,
-            &crate::components::Collider::Box {
-                half_extents: box_size,
-            },
-            Vec3::ONE,
-            (Vec3::ZERO, Quat::IDENTITY),
-            &rigidbody,
-            Vec3::ZERO,
-            Vec3::ZERO,
-            false,
-        );
-
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_spawn_kinematic_box() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let rigidbody = RigidBody::Kinematic;
-        let box_size = Vec3::splat(1.0);
-
-        let result = physics_world.spawn_body(
-            Entity::PLACEHOLDER,
-            &crate::components::Collider::Box {
-                half_extents: box_size,
-            },
-            Vec3::ONE,
-            (Vec3::ZERO, Quat::IDENTITY),
-            &rigidbody,
-            Vec3::ZERO,
-            Vec3::ZERO,
-            false,
-        );
-
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_create_box_shape_failure() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let rigidbody = RigidBody::Static;
-        let box_size = Vec3::splat(-1.0);
-
-        let result = physics_world.spawn_body(
-            Entity::PLACEHOLDER,
-            &crate::components::Collider::Box {
-                half_extents: box_size,
-            },
-            Vec3::ONE,
-            (Vec3::ZERO, Quat::IDENTITY),
-            &rigidbody,
-            Vec3::ZERO,
-            Vec3::ZERO,
-            false,
-        );
-
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_get_transform_invalid_and_destroyed_body() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-
-        // 1. Querying an invalid body ID returns None
-        let invalid_id = rolt::BodyId::new(INVALID_BODY_ID);
-        assert!(physics_world.get_transform(invalid_id).is_none());
-
-        // 2. Querying an unallocated body ID returns None
-        let fake_id = rolt::BodyId::new(9999);
-        assert!(physics_world.get_transform(fake_id).is_none());
-
-        // 3. Spawning a valid box returns Some(...)
-        let body_id = physics_world
-            .spawn_body(
-                Entity::PLACEHOLDER,
-                &crate::components::Collider::Box {
+                &Collider::Box {
                     half_extents: Vec3::splat(1.0),
                 },
                 Vec3::ONE,
@@ -646,170 +199,9 @@ mod tests {
                 Vec3::ZERO,
                 false,
             )
-            .expect("Failed to spawn box");
-        assert!(physics_world.get_transform(body_id).is_some());
+            .expect("spawn via wrapper must succeed");
 
-        // 4. Destroying the body causes get_transform to return None
-        physics_world.destroy_body(body_id);
-        assert!(physics_world.get_transform(body_id).is_none());
-    }
-
-    #[test]
-    fn test_spawn_body_stores_entity_user_data() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let test_entity = Entity::from_raw_u32(42).unwrap();
-
-        let body_id = physics_world
-            .spawn_body(
-                test_entity,
-                &crate::components::Collider::Box {
-                    half_extents: Vec3::splat(1.0),
-                },
-                Vec3::ONE,
-                (Vec3::ZERO, Quat::IDENTITY),
-                &RigidBody::Dynamic,
-                Vec3::ZERO,
-                Vec3::ZERO,
-                false,
-            )
-            .expect("Failed to spawn box");
-
-        let user_data = physics_world
-            .physics_system()
-            .body_interface()
-            .user_data(body_id);
-        assert_eq!(Entity::from_bits(user_data), test_entity);
-    }
-
-    #[test]
-    fn test_step_handles_invalid_delta_time() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-
-        // Calling step with 0.0, negative dt, or NaN should safely return without panic
-        physics_world.step(0.0, 1);
-        physics_world.step(-1.0 / 60.0, 1);
-        physics_world.step(f32::NAN, 1);
-    }
-
-    #[test]
-    fn test_velocity_getters_and_setters() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let rigidbody = RigidBody::Dynamic;
-        let box_size = Vec3::splat(1.0);
-
-        let body_id = physics_world
-            .spawn_body(
-                Entity::PLACEHOLDER,
-                &crate::components::Collider::Box {
-                    half_extents: box_size,
-                },
-                Vec3::ONE,
-                (Vec3::ZERO, Quat::IDENTITY),
-                &rigidbody,
-                Vec3::ZERO,
-                Vec3::ZERO,
-                false,
-            )
-            .expect("Failed to spawn box");
-
-        let target_lin_vel = Vec3::new(1.0, 2.0, 3.0);
-        let target_ang_vel = Vec3::new(4.0, 5.0, 6.0);
-
-        physics_world.set_linear_velocity(body_id, target_lin_vel);
-        physics_world.set_angular_velocity(body_id, target_ang_vel);
-
-        assert_eq!(
-            physics_world.get_linear_velocity(body_id).unwrap(),
-            target_lin_vel
-        );
-        assert_eq!(
-            physics_world.get_angular_velocity(body_id).unwrap(),
-            target_ang_vel
-        );
-    }
-
-    #[test]
-    fn test_is_active_lifecycle() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-
-        // 1. Invalid and unallocated IDs return false
-        assert!(!physics_world.is_active(rolt::BodyId::new(INVALID_BODY_ID)));
-        assert!(!physics_world.is_active(rolt::BodyId::new(9999)));
-
-        // 2. Newly spawned dynamic box is active
-        let body_id = physics_world
-            .spawn_body(
-                Entity::PLACEHOLDER,
-                &crate::components::Collider::Box {
-                    half_extents: Vec3::splat(1.0),
-                },
-                Vec3::ONE,
-                (Vec3::ZERO, Quat::IDENTITY),
-                &RigidBody::Dynamic,
-                Vec3::ZERO,
-                Vec3::ZERO,
-                false,
-            )
-            .expect("Failed to spawn box");
-        assert!(physics_world.is_active(body_id));
-
-        // 3. Destroyed body returns false
-        physics_world.destroy_body(body_id);
-        assert!(!physics_world.is_active(body_id));
-    }
-
-    #[test]
-    fn test_physics_world_drop_destroys_live_bodies_cleanly() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-
-        // Spawn multiple dynamic bodies
-        for i in 0..10 {
-            let entity = Entity::from_raw_u32(i + 1).unwrap();
-            physics_world.spawn_body(
-                entity,
-                &crate::components::Collider::Box {
-                    half_extents: Vec3::splat(1.0),
-                },
-                Vec3::ONE,
-                (Vec3::new(i as f32, 0.0, 0.0), Quat::IDENTITY),
-                &RigidBody::Dynamic,
-                Vec3::ZERO,
-                Vec3::ZERO,
-                false,
-            );
-        }
-
-        // Dropping physics_world with active bodies must not trigger JPH_ASSERT(mNumBodies == 0)
-        drop(physics_world);
-    }
-
-    #[test]
-    fn test_getters_return_none_for_unallocated_body_id() {
-        let physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let unallocated = rolt::BodyId::new(99_999);
-
-        assert!(physics_world.get_transform(unallocated).is_none());
-        assert!(physics_world.get_linear_velocity(unallocated).is_none());
-        assert!(physics_world.get_angular_velocity(unallocated).is_none());
-    }
-
-    #[test]
-    fn test_setters_noop_for_unallocated_body_id() {
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let unallocated = rolt::BodyId::new(99_999);
-
-        // Mutating unallocated ID must safely no-op without memory corruption
-        physics_world.set_linear_velocity(unallocated, Vec3::X);
-        physics_world.set_angular_velocity(unallocated, Vec3::Y);
-    }
-
-    #[test]
-    #[should_panic(expected = "temp_allocator_size_mb in bytes overflows u32")]
-    fn test_temp_allocator_overflow_panics_safely() {
-        let config = PhysicsConfig {
-            temp_allocator_size_mb: u32::MAX,
-            ..Default::default()
-        };
-        let _ = PhysicsWorld::new(config);
+        let (position, _) = world.get_transform(body_id).unwrap();
+        assert!(position.distance(Vec3::new(1.0, 2.0, 3.0)) < 1e-4);
     }
 }
