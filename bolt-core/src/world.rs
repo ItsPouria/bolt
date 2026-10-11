@@ -3,8 +3,12 @@
 //! This module is the future home of the `PhysicsWorld` type itself — the Jolt
 //! `PhysicsSystem`, its allocators and job system, and the body management
 //! API — together with the engine-agnostic types that engine integrations
-//! convert their component data into before touching the world
-//! ([`WorldConfig`], and the upcoming body-spawning vocabulary).
+//! convert their component data into before touching the world:
+//! [`WorldConfig`], [`BodyType`], and [`BodySpawn`].
+
+use glam::{Quat, Vec3};
+
+use crate::shapes::ShapeSpec;
 
 /// Runtime parameters for constructing a physics world.
 ///
@@ -46,4 +50,56 @@ impl Default for WorldConfig {
             temp_allocator_size_mb: 10,
         }
     }
+}
+
+/// The motion behavior of a physics body.
+///
+/// This is the engine-agnostic twin of an integration's rigid-body component
+/// (bolt-bevy's `RigidBody`): integrations convert their component into this
+/// type at the crate boundary when spawning bodies, which keeps `bolt-core`
+/// free of engine types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BodyType {
+    /// A body affected by forces, gravity, and collisions (e.g. crates, debris).
+    Dynamic,
+    /// A body that never moves and has infinite mass (e.g. terrain, floors,
+    /// walls).
+    Static,
+    /// A body unaffected by forces but moved manually, which can push dynamic
+    /// bodies around (e.g. platforms, elevators).
+    Kinematic,
+}
+
+/// The complete description of a body to spawn into the physics world.
+///
+/// This is the parameter object of the world's body-spawning API: everything
+/// needed to create one body in a single call, with geometry fully baked
+/// (entity scale applied by the caller) and expressed in world space.
+#[derive(Clone, Debug)]
+pub struct BodySpawn {
+    /// The collision shape, with final baked dimensions in meters.
+    pub shape: ShapeSpec,
+    /// How the body moves and responds to forces.
+    pub body_type: BodyType,
+    /// The world-space position of the body's origin, in meters.
+    pub position: Vec3,
+    /// The world-space rotation of the body.
+    pub rotation: Quat,
+    /// The initial linear velocity, in meters per second.
+    pub linear_velocity: Vec3,
+    /// The initial angular velocity, in radians per second.
+    pub angular_velocity: Vec3,
+    /// An opaque per-body payload stored inside Jolt and retrievable from
+    /// query results.
+    ///
+    /// Jolt identifies bodies by internal IDs; engine integrations use this
+    /// field to map bodies back to their own game objects. Bevy stores
+    /// `entity.to_bits()` here so that contact and query results can be
+    /// translated back into entities.
+    pub user_data: u64,
+    /// Whether to enable continuous collision detection for this body.
+    ///
+    /// Only meaningful for [`BodyType::Dynamic`] bodies: it prevents
+    /// fast-moving bodies from tunneling through thin obstacles.
+    pub use_ccd: bool,
 }

@@ -38,6 +38,75 @@ use joltc_sys::{
     JPC_Shape, JPC_SphereShapeSettings, JPC_SphereShapeSettings_Create, JPC_String, JPC_Vec3,
 };
 
+/// The geometric description of a collision shape, with final baked
+/// dimensions.
+///
+/// This is the engine-agnostic input vocabulary of the shape factory: engine
+/// integrations convert their collider components into a [`ShapeSpec`] before
+/// construction. All scaling is applied by the caller during that conversion
+/// — the dimensions stored here are the final values the shape will be built
+/// from, and nothing in this crate rescales or transforms them afterwards.
+///
+/// All dimensions are in meters.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ShapeSpec {
+    /// A box (rectangular prism) defined by its half-extents from the center.
+    Box {
+        /// The distances from the box's center to its faces along each local
+        /// axis, in meters. The total width, height, and depth of the box are
+        /// exactly twice these values.
+        half_extents: Vec3,
+    },
+    /// A perfectly spherical collision volume.
+    Sphere {
+        /// The distance from the center to the surface, in meters.
+        radius: f32,
+    },
+    /// A capsule (a cylinder capped with two hemispheres), aligned along the
+    /// local Y axis.
+    ///
+    /// The total height of the capsule is `(half_height * 2.0) +
+    /// (radius * 2.0)`.
+    Capsule {
+        /// Half the height of the inner cylindrical portion, in meters.
+        /// Excludes the hemispherical end caps.
+        half_height: f32,
+        /// The radius shared by the central cylinder and the end caps, in
+        /// meters.
+        radius: f32,
+    },
+    /// A cylinder with flat circular end caps, aligned along the local Y axis.
+    Cylinder {
+        /// The distance from the center to either flat cap, in meters.
+        half_height: f32,
+        /// The radius of the circular cross-section, in meters.
+        radius: f32,
+    },
+}
+
+impl ShapeSpec {
+    /// Builds the Jolt shape described by this spec.
+    ///
+    /// Returns `None` if the dimensions are invalid (non-finite or
+    /// non-positive). See the [module documentation][self] for the ownership
+    /// contract of the returned pointer: it carries a single reference,
+    /// which the caller must transfer to a body or release explicitly.
+    pub fn create(&self) -> Option<*mut JPC_Shape> {
+        match self {
+            ShapeSpec::Box { half_extents } => create_box_shape(*half_extents),
+            ShapeSpec::Sphere { radius } => create_sphere_shape(*radius),
+            ShapeSpec::Capsule {
+                half_height,
+                radius,
+            } => create_capsule_shape(*half_height, *radius),
+            ShapeSpec::Cylinder {
+                half_height,
+                radius,
+            } => create_cylinder_shape(*half_height, *radius),
+        }
+    }
+}
+
 /// Creates a box (rectangular prism) shape from its half-extents.
 ///
 /// `half_extents` are the distances from the box's center to its faces along
