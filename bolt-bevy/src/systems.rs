@@ -159,7 +159,7 @@ pub fn sync_transforms(
 /// Lifecycle observer that removes and destroys Jolt physics bodies when their
 /// Bevy entity or [`JoltBody`] component is despawned / removed.
 pub fn cleanup_despawned_physics_bodies(
-    event: On<Remove, JoltBody>,
+    event: On<Remove<JoltBody>>,
     query: Query<&JoltBody>,
     mut physics_world: ResMut<PhysicsWorld>,
 ) {
@@ -234,14 +234,14 @@ pub fn step_physics(
 }
 
 /// Observer that removes the JoltBody when RigidBody is removed.
-pub fn remove_jolt_body_on_rigidbody_removal(event: On<Remove, RigidBody>, mut commands: Commands) {
+pub fn remove_jolt_body_on_rigidbody_removal(event: On<Remove<RigidBody>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(event.entity) {
         entity.remove::<JoltBody>();
     }
 }
 
 /// Observer that removes the JoltBody when Collider is removed.
-pub fn remove_jolt_body_on_collider_removal(event: On<Remove, Collider>, mut commands: Commands) {
+pub fn remove_jolt_body_on_collider_removal(event: On<Remove<Collider>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(event.entity) {
         entity.remove::<JoltBody>();
     }
