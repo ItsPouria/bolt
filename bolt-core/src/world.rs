@@ -12,7 +12,8 @@ use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 
 use crate::layers::{
-    SimpleBroadPhaseLayer, SimpleObjectLayerPairFilter, SimpleObjectVsBroadPhaseLayerFilter,
+    OBJECT_LAYER_DYNAMIC, OBJECT_LAYER_STATIC, SimpleBroadPhaseLayer, SimpleObjectLayerPairFilter,
+    SimpleObjectVsBroadPhaseLayerFilter,
 };
 use crate::shapes::ShapeSpec;
 use glam::{Quat, Vec3};
@@ -234,6 +235,313 @@ impl PhysicsWorld {
             JPC_PhysicsSystem_SetGravity(raw_physics_system, gravity_vec);
         }
     }
+
+    /// Spawns a body into the world as described by `spawn`.
+    ///
+    /// Returns the new body's ID, or `None` if the shape could not be built
+    /// or the world's body capacity is full.
+    pub fn spawn_body(&mut self, spawn: BodySpawn) -> Option<rolt::BodyId> {
+        let shape_ptr = spawn.shape.create()?;
+
+        let motion_type = match spawn.body_type {
+            BodyType::Dynamic => joltc_sys::JPC_MOTION_TYPE_DYNAMIC,
+            BodyType::Static => joltc_sys::JPC_MOTION_TYPE_STATIC,
+            BodyType::Kinematic => joltc_sys::JPC_MOTION_TYPE_KINEMATIC,
+        };
+
+        let motion_quality = if spawn.use_ccd && spawn.body_type == BodyType::Dynamic {
+            joltc_sys::JPC_MOTION_QUALITY_LINEAR_CAST
+        } else {
+            joltc_sys::JPC_MOTION_QUALITY_DISCRETE
+        };
+
+        let position = joltc_sys::JPC_Vec3 {
+            x: spawn.position.x,
+            y: spawn.position.y,
+            z: spawn.position.z,
+            _w: 0.0,
+        };
+
+        let rotation = joltc_sys::JPC_Quat {
+            x: spawn.rotation.x,
+            y: spawn.rotation.y,
+            z: spawn.rotation.z,
+            w: spawn.rotation.w,
+        };
+
+        let lin_vel = joltc_sys::JPC_Vec3 {
+            x: spawn.linear_velocity.x,
+            y: spawn.linear_velocity.y,
+            z: spawn.linear_velocity.z,
+            _w: 0.0,
+        };
+
+        let ang_vel = joltc_sys::JPC_Vec3 {
+            x: spawn.angular_velocity.x,
+            y: spawn.angular_velocity.y,
+            z: spawn.angular_velocity.z,
+            _w: 0.0,
+        };
+
+        let object_layer = match spawn.body_type {
+            BodyType::Static => OBJECT_LAYER_STATIC.raw(),
+            BodyType::Dynamic | BodyType::Kinematic => OBJECT_LAYER_DYNAMIC.raw(),
+        };
+
+        let settings = joltc_sys::JPC_BodyCreationSettings {
+            Position: position,
+            Rotation: rotation,
+            MotionType: motion_type,
+            MotionQuality: motion_quality,
+            ObjectLayer: object_layer,
+            Shape: shape_ptr,
+            LinearVelocity: lin_vel,
+            AngularVelocity: ang_vel,
+            UserData: spawn.user_data,
+            ..Default::default()
+        };
+
+        // SAFETY: settings and shape_ptr are valid, and motion types match Jolt requirements.
+        let body_id = unsafe {
+            let body_interface = self.body_interface();
+
+            let id = joltc_sys::JPC_BodyInterface_CreateAndAddBody(
+                body_interface,
+                &settings,
+                joltc_sys::JPC_ACTIVATION_ACTIVATE,
+            );
+
+            joltc_sys::JPC_Shape_Release(shape_ptr);
+
+            id
+        };
+
+        // Check for invalid body ID from Jolt (cInvalidBodyID = 0xFFFFFFFF)
+        if body_id == INVALID_BODY_ID {
+            return None;
+        }
+        let id = BodyId::new(body_id);
+        self.body_registry.insert(id, spawn.user_data);
+        Some(id)
+    }
+
+    /// Returns whether the body with the given ID is active (awake and
+    /// simulated) in Jolt.
+    ///
+    /// Unknown, invalid, or already-destroyed IDs report `false`.
+    pub fn is_active(&self, body_id: BodyId) -> bool {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+            return false;
+        }
+        // SAFETY: The body ID is registered in body_registry and confirmed added before querying.
+        unsafe {
+            let body_interface = self.body_interface();
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return false;
+            }
+            joltc_sys::JPC_BodyInterface_IsActive(body_interface, body_id.raw())
+        }
+    }
+
+    /// Teleports the body to a new world-space position and rotation,
+    /// forcefully waking it.
+    ///
+    /// Unknown or destroyed IDs are ignored.
+    pub fn set_position_and_rotation(&mut self, body_id: BodyId, position: Vec3, rotation: Quat) {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+            return;
+        }
+        // SAFETY: body_id is valid and registered.
+        unsafe {
+            let body_interface = self.body_interface();
+            let pos = joltc_sys::JPC_Vec3 {
+                x: position.x,
+                y: position.y,
+                z: position.z,
+                _w: 0.0,
+            };
+            let rot = joltc_sys::JPC_Quat {
+                x: rotation.x,
+                y: rotation.y,
+                z: rotation.z,
+                w: rotation.w,
+            };
+            joltc_sys::JPC_BodyInterface_SetPositionAndRotation(
+                body_interface,
+                body_id.raw(),
+                pos,
+                rot,
+                joltc_sys::JPC_ACTIVATION_ACTIVATE,
+            );
+        }
+    }
+
+    /// Retrieves the body's current world-space position and rotation.
+    ///
+    /// Returns `None` for unknown or already-destroyed IDs.
+    pub fn get_transform(&self, body_id: BodyId) -> Option<(Vec3, Quat)> {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+            return None;
+        }
+        // SAFETY: body_id is verified to be valid and allocated in this PhysicsWorld.
+        unsafe {
+            let body_interface = self.body_interface();
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return None;
+            }
+
+            let mut pos = joltc_sys::JPC_Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                _w: 0.0,
+            };
+            let mut rot = joltc_sys::JPC_Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 0.0,
+            };
+
+            joltc_sys::JPC_BodyInterface_GetPositionAndRotation(
+                body_interface,
+                body_id.raw(),
+                &mut pos,
+                &mut rot,
+            );
+
+            Some((
+                Vec3::new(pos.x, pos.y, pos.z),
+                Quat::from_xyzw(rot.x, rot.y, rot.z, rot.w),
+            ))
+        }
+    }
+
+    /// Retrieves the body's linear velocity, in meters per second.
+    ///
+    /// Returns `None` for unknown or already-destroyed IDs.
+    pub fn get_linear_velocity(&self, body_id: BodyId) -> Option<Vec3> {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+            return None;
+        }
+        // SAFETY: We verify the body ID is valid and added before querying its state.
+        unsafe {
+            let body_interface = self.body_interface();
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return None;
+            }
+
+            let lin_vel =
+                joltc_sys::JPC_BodyInterface_GetLinearVelocity(body_interface, body_id.raw());
+
+            Some(Vec3::new(lin_vel.x, lin_vel.y, lin_vel.z))
+        }
+    }
+
+    /// Retrieves the body's angular velocity, in radians per second.
+    ///
+    /// Returns `None` for unknown or already-destroyed IDs.
+    pub fn get_angular_velocity(&self, body_id: BodyId) -> Option<Vec3> {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+            return None;
+        }
+        // SAFETY: We verify the body ID is valid and added before querying its state.
+        unsafe {
+            let body_interface = self.body_interface();
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return None;
+            }
+
+            let ang_vel =
+                joltc_sys::JPC_BodyInterface_GetAngularVelocity(body_interface, body_id.raw());
+
+            Some(Vec3::new(ang_vel.x, ang_vel.y, ang_vel.z))
+        }
+    }
+
+    /// Sets the body's linear velocity, in meters per second.
+    ///
+    /// Unknown or already-destroyed IDs are ignored.
+    pub fn set_linear_velocity(&mut self, body_id: BodyId, linear_velocity: Vec3) {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+            return;
+        }
+        // SAFETY: We verify the body ID is valid and added before mutating its state.
+        unsafe {
+            let body_interface = self.body_interface();
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return;
+            }
+
+            let jolt_vel = joltc_sys::JPC_Vec3 {
+                x: linear_velocity.x,
+                y: linear_velocity.y,
+                z: linear_velocity.z,
+                _w: 0.0,
+            };
+
+            joltc_sys::JPC_BodyInterface_SetLinearVelocity(body_interface, body_id.raw(), jolt_vel);
+        }
+    }
+
+    /// Sets the body's angular velocity, in radians per second.
+    ///
+    /// Unknown or already-destroyed IDs are ignored.
+    pub fn set_angular_velocity(&mut self, body_id: BodyId, angular_velocity: Vec3) {
+        if body_id.raw() == INVALID_BODY_ID || !self.body_registry.contains_key(&body_id) {
+            return;
+        }
+        // SAFETY: We verify the body ID is valid and added before mutating its state.
+        unsafe {
+            let body_interface = self.body_interface();
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                return;
+            }
+
+            let jolt_vel = joltc_sys::JPC_Vec3 {
+                x: angular_velocity.x,
+                y: angular_velocity.y,
+                z: angular_velocity.z,
+                _w: 0.0,
+            };
+
+            joltc_sys::JPC_BodyInterface_SetAngularVelocity(
+                body_interface,
+                body_id.raw(),
+                jolt_vel,
+            );
+        }
+    }
+
+    /// Destroys the body with the given ID and releases its Jolt resources.
+    ///
+    /// Returns whether a registered body was destroyed; unknown or
+    /// already-destroyed IDs return `false` without side effects.
+    pub fn destroy_body(&mut self, body_id: BodyId) -> bool {
+        if body_id.raw() == INVALID_BODY_ID {
+            return false;
+        }
+
+        if self.body_registry.remove(&body_id).is_none() {
+            return false;
+        }
+
+        // SAFETY: The body ID is valid because we only destroy it if it exists in our body_registry,
+        // which guarantees it was allocated by this PhysicsWorld and has not yet been destroyed.
+        unsafe {
+            let body_interface = self.body_interface();
+            if joltc_sys::JPC_BodyInterface_IsAdded(body_interface, body_id.raw()) {
+                joltc_sys::JPC_BodyInterface_RemoveBody(body_interface, body_id.raw());
+            }
+            joltc_sys::JPC_BodyInterface_DestroyBody(body_interface, body_id.raw());
+        }
+        true
+    }
 }
 
 impl Drop for PhysicsWorld {
@@ -271,3 +579,229 @@ impl Drop for PhysicsWorld {
 unsafe impl Send for PhysicsWorld {}
 // SAFETY: See Send justification. Jolt's C++ locks make `&self` reads safe across threads.
 unsafe impl Sync for PhysicsWorld {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a minimal one-meter box spawn with sensible defaults; tests
+    /// override individual fields (e.g. `position`, `shape`) as needed.
+    fn box_spawn(body_type: BodyType, user_data: u64) -> BodySpawn {
+        BodySpawn {
+            shape: ShapeSpec::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+            body_type,
+            position: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            linear_velocity: Vec3::ZERO,
+            angular_velocity: Vec3::ZERO,
+            user_data,
+            use_ccd: false,
+        }
+    }
+
+    #[test]
+    fn test_physics_system_getter() {
+        let physics_world = PhysicsWorld::new(WorldConfig::default());
+        let system = physics_world.physics_system();
+
+        // Assert that the raw C++ pointer inside the system successfully initialized
+        assert!(
+            !system.raw().is_null(),
+            "The C++ Jolt PhysicsSystem pointer was null!"
+        );
+    }
+
+    #[test]
+    fn test_set_position_and_rotation_valid_body() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let body_id = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 0))
+            .expect("Failed to spawn body");
+
+        let new_pos = Vec3::new(10.0, 20.0, 30.0);
+        let new_rot = Quat::from_rotation_x(std::f32::consts::PI / 2.0);
+
+        physics_world.set_position_and_rotation(body_id, new_pos, new_rot);
+
+        let (fetched_pos, fetched_rot) = physics_world.get_transform(body_id).unwrap();
+        assert!(fetched_pos.distance(new_pos) < 1e-4);
+        // Quat::angle_between requires normalized quats, and angle might be slightly off.
+        // Dot product is safe.
+        assert!((1.0 - fetched_rot.dot(new_rot).abs()) < 1e-4);
+    }
+
+    #[test]
+    fn test_set_position_and_rotation_invalid_body_noop() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let invalid_id = BodyId::new(INVALID_BODY_ID);
+        // Should not panic or crash
+        physics_world.set_position_and_rotation(invalid_id, Vec3::ZERO, Quat::IDENTITY);
+
+        let fake_id = BodyId::new(9999);
+        physics_world.set_position_and_rotation(fake_id, Vec3::ZERO, Quat::IDENTITY);
+    }
+
+    #[test]
+    fn test_spawn_static_box() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let result = physics_world.spawn_body(box_spawn(BodyType::Static, 0));
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_spawn_kinematic_box() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let result = physics_world.spawn_body(box_spawn(BodyType::Kinematic, 0));
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_spawn_with_invalid_shape_returns_none() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let mut spawn = box_spawn(BodyType::Static, 0);
+        spawn.shape = ShapeSpec::Box {
+            half_extents: Vec3::splat(-1.0),
+        };
+        assert!(physics_world.spawn_body(spawn).is_none());
+    }
+
+    #[test]
+    fn test_get_transform_invalid_and_destroyed_body() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+
+        // 1. Querying an invalid body ID returns None
+        let invalid_id = BodyId::new(INVALID_BODY_ID);
+        assert!(physics_world.get_transform(invalid_id).is_none());
+
+        // 2. Querying an unallocated body ID returns None
+        let fake_id = BodyId::new(9999);
+        assert!(physics_world.get_transform(fake_id).is_none());
+
+        // 3. Spawning a valid box returns Some(...)
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.position = Vec3::new(1.0, 2.0, 3.0);
+        let body_id = physics_world
+            .spawn_body(spawn)
+            .expect("Failed to spawn box");
+        assert!(physics_world.get_transform(body_id).is_some());
+
+        // 4. Destroying the body causes get_transform to return None
+        physics_world.destroy_body(body_id);
+        assert!(physics_world.get_transform(body_id).is_none());
+    }
+
+    #[test]
+    fn test_spawn_body_stores_user_data() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let body_id = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 42))
+            .expect("Failed to spawn box");
+
+        let user_data = physics_world
+            .physics_system()
+            .body_interface()
+            .user_data(body_id);
+        assert_eq!(user_data, 42);
+    }
+
+    #[test]
+    fn test_step_handles_invalid_delta_time() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+
+        // Calling step with 0.0, negative dt, or NaN should safely return without panic
+        physics_world.step(0.0, 1);
+        physics_world.step(-1.0 / 60.0, 1);
+        physics_world.step(f32::NAN, 1);
+    }
+
+    #[test]
+    fn test_velocity_getters_and_setters() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let body_id = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 0))
+            .expect("Failed to spawn box");
+
+        let target_lin_vel = Vec3::new(1.0, 2.0, 3.0);
+        let target_ang_vel = Vec3::new(4.0, 5.0, 6.0);
+
+        physics_world.set_linear_velocity(body_id, target_lin_vel);
+        physics_world.set_angular_velocity(body_id, target_ang_vel);
+
+        assert_eq!(
+            physics_world.get_linear_velocity(body_id).unwrap(),
+            target_lin_vel
+        );
+        assert_eq!(
+            physics_world.get_angular_velocity(body_id).unwrap(),
+            target_ang_vel
+        );
+    }
+
+    #[test]
+    fn test_is_active_lifecycle() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+
+        // 1. Invalid and unallocated IDs return false
+        assert!(!physics_world.is_active(BodyId::new(INVALID_BODY_ID)));
+        assert!(!physics_world.is_active(BodyId::new(9999)));
+
+        // 2. Newly spawned dynamic box is active
+        let body_id = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 0))
+            .expect("Failed to spawn box");
+        assert!(physics_world.is_active(body_id));
+
+        // 3. Destroyed body returns false
+        physics_world.destroy_body(body_id);
+        assert!(!physics_world.is_active(body_id));
+    }
+
+    #[test]
+    fn test_physics_world_drop_destroys_live_bodies_cleanly() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+
+        // Spawn multiple dynamic bodies
+        for i in 0..10 {
+            let spawn = BodySpawn {
+                position: Vec3::new(i as f32, 0.0, 0.0),
+                ..box_spawn(BodyType::Dynamic, i as u64)
+            };
+            physics_world.spawn_body(spawn);
+        }
+
+        // Dropping physics_world with active bodies must not trigger JPH_ASSERT(mNumBodies == 0)
+        drop(physics_world);
+    }
+
+    #[test]
+    fn test_getters_return_none_for_unallocated_body_id() {
+        let physics_world = PhysicsWorld::new(WorldConfig::default());
+        let unallocated = BodyId::new(99_999);
+
+        assert!(physics_world.get_transform(unallocated).is_none());
+        assert!(physics_world.get_linear_velocity(unallocated).is_none());
+        assert!(physics_world.get_angular_velocity(unallocated).is_none());
+    }
+
+    #[test]
+    fn test_setters_noop_for_unallocated_body_id() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let unallocated = BodyId::new(99_999);
+
+        // Mutating unallocated ID must safely no-op without memory corruption
+        physics_world.set_linear_velocity(unallocated, Vec3::X);
+        physics_world.set_angular_velocity(unallocated, Vec3::Y);
+    }
+
+    #[test]
+    #[should_panic(expected = "temp_allocator_size_mb in bytes overflows u32")]
+    fn test_temp_allocator_overflow_panics_safely() {
+        let config = WorldConfig {
+            temp_allocator_size_mb: u32::MAX,
+            ..Default::default()
+        };
+        let _ = PhysicsWorld::new(config);
+    }
+}
