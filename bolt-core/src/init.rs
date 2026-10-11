@@ -9,8 +9,7 @@ static JOLT_INIT: Once = Once::new();
 ///
 /// Idempotent: safe to call any number of times — only the first call does work.
 /// Must run before any Jolt object is created.
-// TODO: make `pub(crate)` once `PhysicsWorld::new` calls this internally.
-pub fn ensure_jolt_initialized() {
+pub(crate) fn ensure_jolt_initialized() {
     JOLT_INIT.call_once(|| {
         // SAFETY: Jolt's C-API global setup must run exactly once before any
         // other Jolt call. `Once` guarantees this is the one and only call.

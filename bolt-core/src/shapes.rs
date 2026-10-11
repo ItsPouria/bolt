@@ -25,10 +25,6 @@
 //! diagnostic detail from Jolt is consumed internally while freeing the error
 //! string.
 
-// TODO(phase-2): tighten these constructors to `pub(crate)` once
-// `PhysicsWorld::spawn_body` lives in this crate and becomes the sole
-// consumer of the factory.
-
 use std::ptr;
 
 use glam::Vec3;
@@ -115,7 +111,7 @@ impl ShapeSpec {
 ///
 /// A convex radius of 0.05 m is applied, rounding the box's edges slightly to
 /// improve the stability of collision detection.
-pub fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
+pub(crate) fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
     if !half_extents.is_finite() || half_extents.min_element() <= 0.0 {
         return None;
     }
@@ -151,7 +147,7 @@ pub fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
 ///
 /// `radius` is the distance from the center to the surface, in meters. It
 /// must be finite and strictly positive.
-pub fn create_sphere_shape(radius: f32) -> Option<*mut JPC_Shape> {
+pub(crate) fn create_sphere_shape(radius: f32) -> Option<*mut JPC_Shape> {
     if radius <= 0.0 || !radius.is_finite() {
         return None;
     }
@@ -177,7 +173,7 @@ pub fn create_sphere_shape(radius: f32) -> Option<*mut JPC_Shape> {
 /// (excluding the hemispherical caps), and `radius` is shared by the cylinder
 /// and the caps. Both are in meters. `radius` must be finite and strictly
 /// positive; `half_height` must be finite and non-negative.
-pub fn create_capsule_shape(half_height: f32, radius: f32) -> Option<*mut JPC_Shape> {
+pub(crate) fn create_capsule_shape(half_height: f32, radius: f32) -> Option<*mut JPC_Shape> {
     if radius <= 0.0 || half_height < 0.0 || !radius.is_finite() || !half_height.is_finite() {
         return None;
     }
@@ -206,7 +202,7 @@ pub fn create_capsule_shape(half_height: f32, radius: f32) -> Option<*mut JPC_Sh
 ///
 /// A convex radius of 0.05 m is applied, rounding the cylinder's edges
 /// slightly to improve the stability of collision detection.
-pub fn create_cylinder_shape(half_height: f32, radius: f32) -> Option<*mut JPC_Shape> {
+pub(crate) fn create_cylinder_shape(half_height: f32, radius: f32) -> Option<*mut JPC_Shape> {
     if radius <= 0.0 || half_height <= 0.0 || !radius.is_finite() || !half_height.is_finite() {
         return None;
     }
