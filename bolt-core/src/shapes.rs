@@ -12,7 +12,7 @@
 //!
 //! # Ownership
 //!
-//! On success, the returned [`JPC_Shape`] pointer carries a single reference.
+//! On success, the returned [`JPC_Shape`](joltc_sys::JPC_Shape) pointer carries a single reference.
 //! The caller must either transfer ownership to a body (via
 //! `JPC_BodyCreationSettings`, after which Jolt manages the reference) or
 //! release it explicitly with `JPC_Shape_Release` to avoid leaking the C++
@@ -26,7 +26,7 @@
 //! string.
 
 // TODO(phase-2): tighten these constructors to `pub(crate)` once
-// `CorePhysicsWorld::spawn_body` lives in this crate and becomes the sole
+// `PhysicsWorld::spawn_body` lives in this crate and becomes the sole
 // consumer of the factory.
 
 use std::ptr;

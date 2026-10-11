@@ -1,10 +1,11 @@
 //! The engine-agnostic Jolt physics world and its construction vocabulary.
 //!
-//! This module is the future home of the `PhysicsWorld` type itself — the Jolt
+//! This module is home to the [`PhysicsWorld`](world::PhysicsWorld) type — the Jolt
 //! `PhysicsSystem`, its allocators and job system, and the body management
 //! API — together with the engine-agnostic types that engine integrations
 //! convert their component data into before touching the world:
-//! [`WorldConfig`], [`BodyType`], and [`BodySpawn`].
+//! [`WorldConfig`](world::WorldConfig), [`BodyType`](world::BodyType), and
+//! [`BodySpawn`](world::BodySpawn).
 
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
@@ -25,7 +26,7 @@ use rolt::{BodyId, PhysicsSystem};
 /// Constant representing an invalid or unallocated Jolt body ID (0xFFFFFFFF).
 pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
 
-/// Runtime parameters for constructing a physics world.
+/// Runtime parameters for constructing a [`PhysicsWorld`].
 ///
 /// This is the engine-agnostic parameter set: plain data with no engine
 /// attached. Engine integrations typically expose their own user-facing
@@ -87,7 +88,7 @@ pub enum BodyType {
 
 /// The complete description of a body to spawn into the physics world.
 ///
-/// This is the parameter object of the world's body-spawning API: everything
+/// This is the parameter object of [`PhysicsWorld`]'s body-spawning API: everything
 /// needed to create one body in a single call, with geometry fully baked
 /// (entity scale applied by the caller) and expressed in world space.
 #[derive(Clone, Debug)]
