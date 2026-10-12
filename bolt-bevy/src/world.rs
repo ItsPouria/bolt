@@ -1,9 +1,9 @@
 //! The Bevy resource wrapper around `bolt-core`'s physics world.
 //!
-//! This type is the ECS host: it implements [`Resource`] so Bevy can store
+//! This type is the ECS host: it implements `Resource` so Bevy can store
 //! the world, converts Bevy component data into `bolt-core`'s engine-agnostic
 //! vocabulary at the boundary, and delegates all simulation work to the
-//! wrapped [`CorePhysicsWorld`].
+//! wrapped `bolt_core::world::PhysicsWorld`.
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::resource::Resource;
@@ -19,8 +19,8 @@ use crate::config::PhysicsConfig;
 
 /// The Bevy resource hosting the Jolt physics world.
 ///
-/// See the [crate-level docs](crate) and [`CorePhysicsWorld`] for the
-/// underlying engine-agnostic implementation.
+/// See the [crate-level docs](crate) and [`PhysicsWorld`](bolt_core::world::PhysicsWorld)
+/// for the underlying engine-agnostic implementation.
 #[derive(Resource)]
 pub struct PhysicsWorld(pub(crate) CorePhysicsWorld);
 
