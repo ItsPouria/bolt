@@ -10,13 +10,24 @@ High-performance [Jolt Physics](https://github.com/jrouwe/JoltPhysics) integrati
 
 Bolt is split into two crates with a strict boundary:
 
-```
-┌─────────────────────────────┐          ┌───────────────────────────────────┐
-│          bolt-bevy          │          │             bolt-core             │
-│   Bevy plugin, components   │ translate│   Engine-agnostic Jolt runtime   │
-│   RigidBody, Collider, ...  │────────▶ │   PhysicsWorld, BodySpawn,       │
-│   ECS synchronization       │          │   opaque BodyHandles              │
-└─────────────────────────────┘          └───────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph bevy ["bolt-bevy"]
+        comp["Bevy components:<br/>RigidBody, Collider, velocities"]
+        wrap["PhysicsWorld resource<br/>(thin translator)"]
+    end
+
+    subgraph core ["bolt-core, zero Bevy dependencies"]
+        world["PhysicsWorld:<br/>slot table, opaque BodyHandles"]
+        shapes["Shape factory and collision layers"]
+    end
+
+    jolt["Jolt Physics (C++)<br/>reached via rolt and joltc-sys"]
+
+    comp --> wrap
+    wrap -->|"BodySpawn: baked geometry,<br/>BodyType, user_data"| world
+    world --> shapes
+    world -->|"validated BodyHandles, then FFI"| jolt
 ```
 
 - **`bolt-core`** owns the physics: world lifecycle, body management, collision
