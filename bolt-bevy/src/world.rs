@@ -10,8 +10,9 @@ use bevy::ecs::resource::Resource;
 use bevy::ecs::world::{FromWorld, World};
 use bevy::log::error;
 use bevy::math::{Quat, Vec3};
-use bolt_core::world::{BodySpawn, BodyType, PhysicsWorld as CorePhysicsWorld, WorldConfig};
-use rolt::BodyId;
+use bolt_core::world::{
+    BodyHandle, BodySpawn, BodyType, PhysicsWorld as CorePhysicsWorld, WorldConfig,
+};
 
 use crate::components::{Collider, RigidBody};
 use crate::config::PhysicsConfig;
@@ -59,7 +60,7 @@ impl PhysicsWorld {
         linear_velocity: Vec3,
         angular_velocity: Vec3,
         use_ccd: bool,
-    ) -> Option<BodyId> {
+    ) -> Option<BodyHandle> {
         let (position, rotation) = transform;
 
         let body_type = match rigidbody {
@@ -100,48 +101,52 @@ impl PhysicsWorld {
     }
 
     /// Returns whether the body is awake; see [`CorePhysicsWorld::is_active`].
-    pub fn is_active(&self, body_id: BodyId) -> bool {
-        self.0.is_active(body_id)
+    pub fn is_active(&self, handle: BodyHandle) -> bool {
+        self.0.is_active(handle)
     }
 
     /// Teleports the body; see [`CorePhysicsWorld::set_position_and_rotation`].
-    pub fn set_position_and_rotation(&mut self, body_id: BodyId, position: Vec3, rotation: Quat) {
-        self.0
-            .set_position_and_rotation(body_id, position, rotation);
+    pub fn set_position_and_rotation(
+        &mut self,
+        handle: BodyHandle,
+        position: Vec3,
+        rotation: Quat,
+    ) {
+        self.0.set_position_and_rotation(handle, position, rotation);
     }
 
     /// Reads the body's transform; see [`CorePhysicsWorld::get_transform`].
-    pub fn get_transform(&self, body_id: BodyId) -> Option<(Vec3, Quat)> {
-        self.0.get_transform(body_id)
+    pub fn get_transform(&self, handle: BodyHandle) -> Option<(Vec3, Quat)> {
+        self.0.get_transform(handle)
     }
 
     /// Reads the body's linear velocity, in m/s; see
     /// [`CorePhysicsWorld::get_linear_velocity`].
-    pub fn get_linear_velocity(&self, body_id: BodyId) -> Option<Vec3> {
-        self.0.get_linear_velocity(body_id)
+    pub fn get_linear_velocity(&self, handle: BodyHandle) -> Option<Vec3> {
+        self.0.get_linear_velocity(handle)
     }
 
     /// Reads the body's angular velocity, in rad/s; see
     /// [`CorePhysicsWorld::get_angular_velocity`].
-    pub fn get_angular_velocity(&self, body_id: BodyId) -> Option<Vec3> {
-        self.0.get_angular_velocity(body_id)
+    pub fn get_angular_velocity(&self, handle: BodyHandle) -> Option<Vec3> {
+        self.0.get_angular_velocity(handle)
     }
 
     /// Writes the body's linear velocity, in m/s; see
     /// [`CorePhysicsWorld::set_linear_velocity`].
-    pub fn set_linear_velocity(&mut self, body_id: BodyId, linear_velocity: Vec3) {
-        self.0.set_linear_velocity(body_id, linear_velocity);
+    pub fn set_linear_velocity(&mut self, handle: BodyHandle, linear_velocity: Vec3) {
+        self.0.set_linear_velocity(handle, linear_velocity);
     }
 
     /// Writes the body's angular velocity, in rad/s; see
     /// [`CorePhysicsWorld::set_angular_velocity`].
-    pub fn set_angular_velocity(&mut self, body_id: BodyId, angular_velocity: Vec3) {
-        self.0.set_angular_velocity(body_id, angular_velocity);
+    pub fn set_angular_velocity(&mut self, handle: BodyHandle, angular_velocity: Vec3) {
+        self.0.set_angular_velocity(handle, angular_velocity);
     }
 
     /// Destroys the body; see [`CorePhysicsWorld::destroy_body`].
-    pub fn destroy_body(&mut self, body_id: BodyId) -> bool {
-        self.0.destroy_body(body_id)
+    pub fn destroy_body(&mut self, handle: BodyHandle) -> bool {
+        self.0.destroy_body(handle)
     }
 
     /// Escape hatch to Jolt capabilities not yet wrapped; see

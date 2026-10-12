@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bolt_core::shapes::ShapeSpec;
-use rolt::BodyId;
+use bolt_core::world::BodyHandle;
 
 /// Defines the motion type and physical behavior of a body.
 #[non_exhaustive]
@@ -106,11 +106,14 @@ impl Collider {
 /// A component attached to Bevy entities that have a live Jolt Physics body.
 #[derive(Component, Debug)]
 #[component(immutable)]
-pub struct JoltBody(pub(crate) BodyId);
+pub struct JoltBody(pub(crate) BodyHandle);
 
 impl JoltBody {
-    /// Returns the internal Jolt `BodyId` for this entity.
-    pub fn id(&self) -> BodyId {
+    /// Returns the [`BodyHandle`] linking this entity to its physics body.
+    ///
+    /// Handles are opaque and cannot be forged; the physics world rejects
+    /// stale ones after their body is destroyed.
+    pub fn handle(&self) -> BodyHandle {
         self.0
     }
 }

@@ -136,7 +136,7 @@ fn test_despawn_cleans_up_physics_body() {
         .world()
         .get::<bolt_bevy::prelude::JoltBody>(entity)
         .expect("JoltBody was not attached to entity!");
-    let body_id = jolt_body.id();
+    let body_id = jolt_body.handle();
 
     let physics_world = app.world().resource::<bolt_bevy::prelude::PhysicsWorld>();
     assert!(
@@ -194,7 +194,7 @@ fn test_child_entity_spawns_at_world_coordinates() {
 
     let physics_world = app.world().resource::<bolt_bevy::prelude::PhysicsWorld>();
     let (pos, _) = physics_world
-        .get_transform(jolt_body.id())
+        .get_transform(jolt_body.handle())
         .expect("Body transform not found");
 
     // Child world pos should be (10.0, 25.0, 30.0), not local (0.0, 5.0, 0.0)
