@@ -214,18 +214,29 @@ impl PhysicsWorld {
         }
     }
 
-    /// Returns a shared reference to the underlying Jolt [`PhysicsSystem`].
+    /// Retrieves the opaque per-body payload supplied at spawn time
+    /// ([`BodySpawn::user_data`]).
     ///
-    /// This is an escape hatch for Jolt capabilities `bolt-core` does not yet
-    /// wrap — narrow-phase queries, contact listeners, constraints — reachable
-    /// through the safe `rolt` API. Prefer the methods on [`PhysicsWorld`]
-    /// where available: they validate body IDs against the slot table before
-    /// touching Jolt state, while anything done through this reference is the
-    /// caller's responsibility.
+    /// Engine integrations typically store their own entity identifier here
+    /// so that physics results (queries, contacts) can be mapped back to
+    /// game objects.
     ///
-    /// The reference borrows the world (`&self`), so it cannot outlive it.
-    pub fn physics_system(&self) -> &PhysicsSystem {
-        &self.physics_system
+    /// Returns `None` for unknown or already-destroyed IDs.
+    pub fn user_data(&self, handle: BodyHandle) -> Option<u64> {
+        if !self.is_valid(handle) {
+            return None;
+        }
+        // SAFETY: We verify the body ID is valid and added before querying its state.
+        unsafe {
+            let body_interface = self.body_interface();
+
+            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, handle.0.raw()) {
+                return None;
+            }
+
+            let data = joltc_sys::JPC_BodyInterface_GetUserData(body_interface, handle.0.raw());
+            Some(data)
+        }
     }
 
     /// Helper to get the Jolt BodyInterface.
@@ -680,18 +691,6 @@ mod tests {
     }
 
     #[test]
-    fn test_physics_system_getter() {
-        let physics_world = PhysicsWorld::new(WorldConfig::default());
-        let system = physics_world.physics_system();
-
-        // Assert that the raw C++ pointer inside the system successfully initialized
-        assert!(
-            !system.raw().is_null(),
-            "The C++ Jolt PhysicsSystem pointer was null!"
-        );
-    }
-
-    #[test]
     fn test_set_position_and_rotation_valid_body() {
         let mut physics_world = PhysicsWorld::new(WorldConfig::default());
         let body_id = physics_world
@@ -777,11 +776,13 @@ mod tests {
             .spawn_body(box_spawn(BodyType::Dynamic, 42))
             .expect("Failed to spawn box");
 
-        let user_data = physics_world
-            .physics_system()
-            .body_interface()
-            .user_data(body_id.0);
+        // 1. The payload round-trips through the public getter while the body lives
+        let user_data = physics_world.user_data(body_id).unwrap();
         assert_eq!(user_data, 42);
+
+        // 2. Destroying the body makes the handle stale: the getter must reject it
+        physics_world.destroy_body(body_id);
+        assert!(physics_world.user_data(body_id).is_none());
     }
 
     #[test]

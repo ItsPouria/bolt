@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- `PhysicsWorld::user_data(handle)` in bolt-core: the first public reader of
+  the per-body payload supplied in `BodySpawn::user_data`, validated against
+  the slot table like every other body API. bolt-bevy stores
+  `entity.to_bits()` there, so physics results can be mapped back to entities.
+
 ### Safety
 - Removed bolt-bevy's `PhysicsWorld::physics_system()` passthrough (#3):
   `rolt` exposes body mutators as safe `&self` methods, so through the
@@ -15,6 +21,10 @@ All notable changes to this project will be documented in this file.
   rather than by convention. **Breaking:** callers of the passthrough must
   go through bolt-core's validated API (safe read-only query wrappers are
   planned in #3).
+- bolt-core: removed the public `PhysicsWorld::physics_system()` getter, the
+  last remaining door to raw Jolt state (#3). Internal capabilities will be
+  added as validated `PhysicsWorld` methods instead. **Breaking:** escape-
+  hatch users must migrate; `user_data` above is the first replacement.
 
 ## [0.2.0] - 2026-10-12
 
