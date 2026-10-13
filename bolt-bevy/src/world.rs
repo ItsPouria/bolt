@@ -148,12 +148,6 @@ impl PhysicsWorld {
     pub fn destroy_body(&mut self, handle: BodyHandle) -> bool {
         self.0.destroy_body(handle)
     }
-
-    /// Escape hatch to Jolt capabilities not yet wrapped; see
-    /// [`CorePhysicsWorld::physics_system`].
-    pub fn physics_system(&self) -> &rolt::PhysicsSystem {
-        self.0.physics_system()
-    }
 }
 
 impl FromWorld for PhysicsWorld {

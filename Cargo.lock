@@ -2102,8 +2102,6 @@ version = "0.2.0"
 dependencies = [
  "bevy",
  "bolt-core",
- "joltc-sys",
- "rolt",
 ]
 
 [[package]]

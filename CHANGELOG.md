@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Safety
+- Removed bolt-bevy's `PhysicsWorld::physics_system()` passthrough (#3):
+  `rolt` exposes body mutators as safe `&self` methods, so through the
+  passthrough safe code could destroy bodies behind the slot table's back
+  (a double-destroy use-after-free at world drop) and mutate Jolt state
+  through a shared reference, invalidating the crate's `Sync` guarantee.
+- bolt-bevy no longer depends on `rolt` or `joltc-sys`; the "no Jolt types
+  in bolt-bevy's public API" rule is now enforced by the dependency graph
+  rather than by convention. **Breaking:** callers of the passthrough must
+  go through bolt-core's validated API (safe read-only query wrappers are
+  planned in #3).
+
 ## [0.2.0] - 2026-10-12
 
 ### Architecture

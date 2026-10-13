@@ -37,7 +37,9 @@ flowchart LR
   which drives core directly with no window at all.
 - **`bolt-bevy`** is a thin translator: it converts Bevy component data
   (`Collider`, `RigidBody`, `Transform`) into core's vocabulary at the boundary
-  and delegates. No Jolt/`rolt` type appears in its public API.
+  and delegates. No Jolt/`rolt` type appears in its public API — the crate has
+  no direct `rolt`/`joltc-sys` dependency; the FFI is reached only through
+  `bolt-core`.
 - Bodies are addressed by **opaque `BodyHandle`s** — they cannot be forged from
   raw bits, and the world rejects stale handles after a body is destroyed.
 
