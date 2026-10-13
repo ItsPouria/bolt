@@ -144,6 +144,12 @@ impl PhysicsWorld {
         self.0.set_angular_velocity(handle, angular_velocity);
     }
 
+    /// Reads the body's per-body payload (`entity.to_bits()` for entities
+    /// spawned through bolt-bevy); see [`CorePhysicsWorld::user_data`].
+    pub fn user_data(&self, handle: BodyHandle) -> Option<u64> {
+        self.0.user_data(handle)
+    }
+
     /// Destroys the body; see [`CorePhysicsWorld::destroy_body`].
     pub fn destroy_body(&mut self, handle: BodyHandle) -> bool {
         self.0.destroy_body(handle)

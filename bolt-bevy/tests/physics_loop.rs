@@ -379,3 +379,39 @@ fn test_cylinder_dynamic_body_falls() {
         "Cylinder did not fall! Jolt physics body may not have been created."
     );
 }
+
+#[test]
+fn test_user_data_maps_bodies_back_to_entities() {
+    let mut app = physics_test_app();
+
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+        ))
+        .id();
+
+    // First update initializes the clock; FixedUpdate (and the spawn system
+    // inside it) runs once time advances past a fixed timestep.
+    app.update();
+    advance_time_safely(&mut app, std::time::Duration::from_millis(100));
+
+    // bolt-bevy stores entity.to_bits() in Jolt's per-body payload; the
+    // public core getter must return it so query hits can be mapped back
+    // to entities (the contract raycasts will depend on).
+    let jolt_body = app
+        .world()
+        .get::<JoltBody>(entity)
+        .expect("JoltBody was not attached");
+    let physics_world = app.world().resource::<PhysicsWorld>();
+
+    assert_eq!(
+        physics_world.user_data(jolt_body.handle()),
+        Some(entity.to_bits()),
+        "user_data must carry the entity's bits for query-to-entity mapping"
+    );
+}
