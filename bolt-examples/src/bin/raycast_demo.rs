@@ -157,9 +157,12 @@ fn cast_and_draw_ray(
         return;
     };
 
-    // Start at the sphere's surface rather than its center: we want to look
-    // *past* the source, not at it.
-    let origin = sphere.translation + Vec3::new(0.0, 0.0, 0.5);
+    // Start beyond the sphere's surface with clearance: an origin exactly on
+    // (or inside) the source body reports that body itself at fraction 0,
+    // shadowing everything downrange. Engines normally exclude the shooter
+    // with a body filter — deferred capability, tracked in issue #9 — so the
+    // demo simply steps the origin past the source.
+    let origin = sphere.translation + Vec3::new(0.0, 0.0, 0.75);
     let direction = Vec3::new(0.0, 0.0, RAY_LENGTH);
 
     let message = match physics.ray_cast(origin, direction) {
