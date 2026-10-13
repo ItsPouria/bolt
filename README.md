@@ -73,6 +73,7 @@ are 10–50× slower and will lie to you about performance):
 ```bash
 cargo run --release -p bolt-examples --bin hello_world
 cargo run --release -p bolt-examples --bin kinematic_elevator
+cargo run --release -p bolt-examples --bin raycast_demo
 ```
 
 ---
