@@ -796,6 +796,25 @@ mod tests {
     }
 
     #[test]
+    fn test_step_clamps_non_positive_collision_steps() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let body_id = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 0))
+            .expect("Failed to spawn box");
+
+        // Zero and negative substep counts clamp to a single collision step:
+        // no panic, and the simulation still advances under default gravity.
+        physics_world.step(1.0 / 60.0, 0);
+        physics_world.step(1.0 / 60.0, -3);
+
+        let (position, _) = physics_world.get_transform(body_id).unwrap();
+        assert!(
+            position.y < 0.0,
+            "body should have fallen under default gravity"
+        );
+    }
+
+    #[test]
     fn test_velocity_getters_and_setters() {
         let mut physics_world = PhysicsWorld::new(WorldConfig::default());
         let body_id = physics_world
@@ -854,6 +873,50 @@ mod tests {
     }
 
     #[test]
+    fn test_recycled_slot_rejects_original_handle() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let first = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 1))
+            .expect("Failed to spawn first box");
+        physics_world.destroy_body(first);
+
+        // Jolt recycles freed slots: the next body re-occupies the same index
+        // with a fresh sequence number. This is the real-world version of
+        // `test_stale_generation_handle_is_invalid` — no hand-forged bits.
+        let second = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 2))
+            .expect("Failed to spawn second box");
+
+        assert_eq!(
+            first.0.raw() & BODY_INDEX_MASK,
+            second.0.raw() & BODY_INDEX_MASK,
+            "Jolt did not recycle the freed slot; adjust this test"
+        );
+        assert_ne!(first.0.raw(), second.0.raw());
+
+        // The stale handle must be rejected even though a live body now
+        // occupies its slot — and the new handle must be fully valid.
+        assert!(!physics_world.is_active(first));
+        assert!(physics_world.get_transform(first).is_none());
+        assert!(physics_world.user_data(first).is_none());
+        assert!(physics_world.is_active(second));
+        assert_eq!(physics_world.user_data(second), Some(2));
+    }
+
+    #[test]
+    fn test_spawned_handles_are_unique() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let mut seen = std::collections::HashSet::new();
+        for i in 0..64u64 {
+            let handle = physics_world
+                .spawn_body(box_spawn(BodyType::Dynamic, i))
+                .expect("Failed to spawn box");
+            assert!(seen.insert(handle.0), "duplicate body handle handed out");
+        }
+        assert_eq!(seen.len(), 64);
+    }
+
+    #[test]
     fn test_physics_world_drop_destroys_live_bodies_cleanly() {
         let mut physics_world = PhysicsWorld::new(WorldConfig::default());
 
@@ -867,6 +930,33 @@ mod tests {
         }
 
         // Dropping physics_world with active bodies must not trigger JPH_ASSERT(mNumBodies == 0)
+        drop(physics_world);
+    }
+
+    #[test]
+    fn test_drop_destroys_mixed_body_types_cleanly() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+
+        // Static, kinematic, and dynamic bodies take different layer and
+        // motion-type paths through teardown; sweep all of them.
+        for (body_type, lane) in [
+            (BodyType::Static, 0.0),
+            (BodyType::Kinematic, 10.0),
+            (BodyType::Dynamic, 20.0),
+        ] {
+            for layer in 0..4 {
+                let spawn = BodySpawn {
+                    position: Vec3::new(lane, layer as f32, 0.0),
+                    ..box_spawn(body_type, layer as u64)
+                };
+                physics_world
+                    .spawn_body(spawn)
+                    .expect("Failed to spawn body");
+            }
+        }
+
+        // Dropping with live bodies of every motion type must not trip
+        // Jolt's teardown assertions.
         drop(physics_world);
     }
 
