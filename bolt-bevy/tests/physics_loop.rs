@@ -415,3 +415,227 @@ fn test_user_data_maps_bodies_back_to_entities() {
         "user_data must carry the entity's bits for query-to-entity mapping"
     );
 }
+
+#[test]
+fn test_static_body_transform_stays_user_authoritative() {
+    let mut app = physics_test_app();
+
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Static,
+            Collider::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+        ))
+        .id();
+
+    app.update();
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // Statics are excluded from transform sync: simulation must never
+    // rewrite the user's Transform.
+    assert_eq!(
+        app.world().get::<Transform>(entity).unwrap().translation,
+        Vec3::new(0.0, 10.0, 0.0)
+    );
+
+    // The user remains the authority: moving the Transform teleports the
+    // Jolt body, and sync never fights back.
+    {
+        let mut transform = app.world_mut().get_mut::<Transform>(entity).unwrap();
+        transform.translation = Vec3::new(5.0, 5.0, 5.0);
+    }
+    advance_time_safely(&mut app, Duration::from_millis(200));
+
+    let jolt_body = app.world().get::<JoltBody>(entity).unwrap();
+    let (position, _) = app
+        .world()
+        .resource::<PhysicsWorld>()
+        .get_transform(jolt_body.handle())
+        .expect("static body must still be live");
+    assert!(
+        position.distance(Vec3::new(5.0, 5.0, 5.0)) < 1e-3,
+        "Jolt body must follow the user's teleport"
+    );
+    assert_eq!(
+        app.world().get::<Transform>(entity).unwrap().translation,
+        Vec3::new(5.0, 5.0, 5.0),
+        "sync must not clobber a static's Transform"
+    );
+}
+
+#[test]
+fn test_gravity_change_applies_mid_simulation() {
+    let mut app = physics_test_app();
+
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+        ))
+        .id();
+
+    app.update();
+    advance_time_safely(&mut app, Duration::from_millis(300));
+    assert!(
+        app.world().get::<Transform>(entity).unwrap().translation.y < 10.0,
+        "body must be falling under default gravity"
+    );
+
+    // Freeze gravity mid-run: apply_gravity must notice the resource change
+    // and push it into Jolt before the next step.
+    app.world_mut().insert_resource(Gravity(Vec3::ZERO));
+
+    let velocity_at_freeze = app
+        .world()
+        .get::<LinearVelocity>(entity)
+        .expect("LinearVelocity is required on RigidBody")
+        .y;
+
+    advance_time_safely(&mut app, Duration::from_millis(500));
+
+    let velocity_after = app.world().get::<LinearVelocity>(entity).unwrap().y;
+    // Jolt's default linear damping (0.05/s) may bleed a little velocity
+    // (~0.1 m/s over 0.5 s); continued gravity would change it by ~4.9 m/s.
+    assert!(
+        (velocity_after - velocity_at_freeze).abs() < 0.2,
+        "vertical velocity must stop changing once gravity is zero (was {}, now {})",
+        velocity_at_freeze,
+        velocity_after
+    );
+}
+
+#[test]
+fn test_despawning_parent_destroys_child_physics_bodies() {
+    let mut app = physics_test_app();
+
+    let parent = app
+        .world_mut()
+        .spawn(Transform::from_xyz(10.0, 20.0, 30.0))
+        .id();
+    let child = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 5.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+            ChildOf(parent),
+        ))
+        .id();
+
+    app.update();
+    advance_time_safely(&mut app, Duration::from_millis(100));
+
+    let child_body = app
+        .world()
+        .get::<JoltBody>(child)
+        .expect("child must have a physics body")
+        .handle();
+
+    // Despawning the parent recursively despawns the child; the observer
+    // cascade must destroy the child's Jolt body with it.
+    app.world_mut().despawn(parent);
+
+    assert!(app.world().get_entity(child).is_err());
+    assert!(
+        app.world()
+            .resource::<PhysicsWorld>()
+            .get_transform(child_body)
+            .is_none(),
+        "child's Jolt body leaked: despawning the parent must destroy it"
+    );
+}
+
+#[test]
+fn test_physics_config_inserted_before_plugin_wins() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(TransformPlugin);
+    // User-provided config must beat the plugin's default.
+    app.insert_resource(PhysicsConfig {
+        max_bodies: 1,
+        ..Default::default()
+    });
+    app.add_plugins(BoltPlugin::default());
+
+    app.world_mut().spawn((
+        Transform::from_xyz(0.0, 5.0, 0.0),
+        RigidBody::Dynamic,
+        Collider::Box {
+            half_extents: Vec3::splat(0.5),
+        },
+    ));
+    app.world_mut().spawn((
+        Transform::from_xyz(5.0, 5.0, 0.0),
+        RigidBody::Dynamic,
+        Collider::Box {
+            half_extents: Vec3::splat(0.5),
+        },
+    ));
+
+    app.update();
+    advance_time_safely(&mut app, Duration::from_millis(200));
+
+    let with_bodies: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<JoltBody>>()
+        .iter(app.world())
+        .collect();
+    assert_eq!(
+        with_bodies.len(),
+        1,
+        "max_bodies = 1 from the user's PhysicsConfig must cap the world at one body"
+    );
+}
+
+#[test]
+fn test_velocity_write_on_dynamic_body_moves_it() {
+    let mut app = physics_test_app();
+    // Zero gravity isolates the velocity signal from acceleration.
+    app.insert_resource(Gravity(Vec3::ZERO));
+
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+        ))
+        .id();
+
+    app.update();
+
+    // A component write on a dynamic body is an engine input, not just a
+    // kinematic feature: apply_velocities must push it into Jolt.
+    {
+        let mut velocity = app.world_mut().get_mut::<LinearVelocity>(entity).unwrap();
+        velocity.y = -5.0;
+    }
+
+    advance_time_safely(&mut app, Duration::from_millis(500));
+
+    let transform = app.world().get::<Transform>(entity).unwrap();
+    // Ideal travel is -5 m/s * 0.5 s = -2.5 m; Jolt's default linear damping
+    // (0.05/s) trims it slightly (~-2.47 m). Tolerance keeps the test
+    // meaningful: a dropped velocity write leaves the body at y = 10.
+    assert!(
+        (transform.translation.y - 7.5).abs() < 0.1,
+        "expected ~-2.5 m of travel from the velocity write, got y = {}",
+        transform.translation.y
+    );
+    let velocity = app.world().get::<LinearVelocity>(entity).unwrap();
+    assert!(
+        (velocity.y - (-5.0)).abs() < 0.2,
+        "velocity must be preserved up to linear damping"
+    );
+}

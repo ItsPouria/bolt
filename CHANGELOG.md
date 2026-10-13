@@ -26,6 +26,17 @@ All notable changes to this project will be documented in this file.
   added as validated `PhysicsWorld` methods instead. **Breaking:** escape-
   hatch users must migrate; `user_data` above is the first replacement.
 
+### Internal
+- Test-suite expansion (#3): slot-recycle and handle-uniqueness tripwires,
+  mixed-body-type teardown, substep clamping (bolt-core white-box);
+  `user_data` contract, capacity exhaustion, and full-surface cross-world
+  safety (bolt-core black-box); `user_data`→entity mapping, static-transform
+  authority, mid-run gravity changes, hierarchical despawn, config
+  precedence, and dynamic-body velocity writes (bolt-bevy ECS).
+- The velocity and gravity tests document that all Bolt bodies carry Jolt's
+  default linear damping (0.05/s); exposing or configuring damping is
+  future work.
+
 ## [0.2.0] - 2026-10-12
 
 ### Architecture
