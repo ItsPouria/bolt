@@ -21,7 +21,7 @@ use joltc_sys::{
     JPC_MAX_PHYSICS_BARRIERS, JPC_MAX_PHYSICS_JOBS, JPC_PhysicsSystem_SetGravity,
     JPC_TempAllocatorImpl, JPC_TempAllocatorImpl_delete, JPC_TempAllocatorImpl_new, JPC_Vec3,
 };
-use rolt::{BodyId, PhysicsSystem};
+use rolt::{BodyId, PhysicsSystem, RRayCast, RayCastArgs};
 
 /// Constant representing an invalid or unallocated Jolt body ID (0xFFFFFFFF).
 pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
@@ -137,6 +137,48 @@ pub struct BodySpawn {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BodyHandle(BodyId);
 
+/// The result of a closest-hit ray query against the physics world.
+///
+/// Produced by [`PhysicsWorld::ray_cast`]. The query reports
+/// the **single closest** body intersected by the ray segment: Jolt walks
+/// its broadphase trees, tests surviving candidates exactly, and keeps the
+/// smallest fraction, pruning anything farther as it goes. Bodies beyond
+/// the ray's length are never reported.
+///
+/// Every field is validated or derived before the hit is returned: the
+/// body's ID is checked against the slot table (so the handle is safe to
+/// use with any world method), the payload is read from the body, and the
+/// impact point is computed from the fraction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RayHit {
+    /// The body that was hit, as a validated handle.
+    ///
+    /// Because the hit's body ID was checked against the slot table before
+    /// this hit was constructed, the handle is guaranteed live at query
+    /// time and can be passed to any `PhysicsWorld` method.
+    pub body: BodyHandle,
+    /// The opaque per-body payload the body was spawned with
+    /// ([`BodySpawn::user_data`]).
+    ///
+    /// Engine integrations store their own object identifier here so that
+    /// query results can be mapped back to game objects: bolt-bevy fills
+    /// it with `entity.to_bits()`, so a hit translates back to an entity
+    /// with `Entity::from_bits(hit.user_data)`.
+    pub user_data: u64,
+    /// The world-space point where the ray impacted the body's surface.
+    ///
+    /// Computed at query time as `origin + fraction * direction`.
+    pub hit_point: Vec3,
+    /// Where along the ray the hit occurred: `0.0` at the ray's origin,
+    /// `1.0` at its far end.
+    ///
+    /// This is a **parameter of the ray, not a distance in meters**: the
+    /// ray's length is the magnitude of the direction vector passed to the
+    /// query. Multiply the fraction by that magnitude to obtain the
+    /// distance traveled.
+    pub fraction: f32,
+}
+
 /// The Jolt physics world: owns the `PhysicsSystem`, its allocators and
 /// worker threads, and the slot-table bookkeeping for validated body access.
 pub struct PhysicsWorld {
@@ -237,6 +279,55 @@ impl PhysicsWorld {
             let data = joltc_sys::JPC_BodyInterface_GetUserData(body_interface, handle.0.raw());
             Some(data)
         }
+    }
+
+    /// Casts a ray into the simulation and returns the closest body it
+    /// intersects, if any.
+    ///
+    /// The ray starts at `origin` and travels along `direction`.
+    /// **The magnitude of `direction` is the ray's maximum distance**: a
+    /// normalized direction casts a 1-meter ray. To cast `max_distance`
+    /// meters along a unit vector `dir`, pass `dir * max_distance`.
+    ///
+    /// Returns the single closest hit along the segment, with the hit
+    /// body's handle validated against the slot table, its
+    /// [`user_data`](Self::user_data) payload included, and the world-space
+    /// impact point computed. Returns `None` when the ray misses
+    /// everything, when it is shorter than the distance to the nearest
+    /// hit, when the inputs are non-finite or the direction has zero
+    /// length, or — defensively — when the hit body cannot be validated.
+    ///
+    /// This is a read-only query: it does not wake bodies or advance the
+    /// simulation. It is also the crate's first fully-safe path to Jolt
+    /// state (no `unsafe` block), built on rolt's checked query wrappers.
+    pub fn ray_cast(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
+        if !origin.is_finite() || !direction.is_finite() || direction.length_squared() == 0.0 {
+            return None;
+        }
+
+        let ray = RRayCast { origin, direction };
+        let args = RayCastArgs {
+            ray,
+            ..Default::default()
+        };
+        let result = self.physics_system.narrow_phase_query().cast_ray(args)?;
+
+        // The query reports a raw Jolt body ID; the unforgeability rule
+        // applies to query hits too, so mint a handle and validate it
+        // against the slot table before handing it out.
+        let handle = BodyHandle(result.body_id);
+        if !self.is_valid(handle) {
+            return None;
+        }
+
+        let payload = self.user_data(handle)?;
+
+        Some(RayHit {
+            body: handle,
+            user_data: payload,
+            hit_point: origin + direction * result.fraction,
+            fraction: result.fraction,
+        })
     }
 
     /// Helper to get the Jolt BodyInterface.
@@ -783,6 +874,109 @@ mod tests {
         // 2. Destroying the body makes the handle stale: the getter must reject it
         physics_world.destroy_body(body_id);
         assert!(physics_world.user_data(body_id).is_none());
+    }
+
+    #[test]
+    fn test_ray_cast_returns_closest_hit() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let box_id = physics_world
+            .spawn_body(box_spawn(BodyType::Static, 42))
+            .expect("Failed to spawn box");
+
+        // Ray from 4 m above the box's top face (the face sits at y = 1),
+        // with a total length of 10 m: the hit is 40% along the ray.
+        let hit = physics_world
+            .ray_cast(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, -10.0, 0.0))
+            .expect("Ray must hit the box");
+
+        assert_eq!(hit.body, box_id);
+        assert_eq!(hit.user_data, 42);
+        assert!((hit.fraction - 0.4).abs() < 1e-4);
+        assert!(hit.hit_point.distance(Vec3::new(0.0, 1.0, 0.0)) < 1e-4);
+    }
+
+    #[test]
+    fn test_ray_cast_reports_the_nearest_of_multiple_hits() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        physics_world
+            .spawn_body(box_spawn(BodyType::Static, 1))
+            .expect("Failed to spawn lower box");
+        let upper = BodySpawn {
+            position: Vec3::new(0.0, 4.0, 0.0),
+            ..box_spawn(BodyType::Static, 2)
+        };
+        physics_world
+            .spawn_body(upper)
+            .expect("Failed to spawn upper box");
+
+        // Both boxes intersect the ray; the query must report the nearer
+        // (upper) one: its top face is 5 m from the origin on a 20 m ray.
+        let hit = physics_world
+            .ray_cast(Vec3::new(0.0, 10.0, 0.0), Vec3::new(0.0, -20.0, 0.0))
+            .expect("Ray must hit a box");
+
+        assert_eq!(hit.user_data, 2);
+        assert!((hit.fraction - 0.25).abs() < 1e-4);
+        assert!(hit.hit_point.distance(Vec3::new(0.0, 5.0, 0.0)) < 1e-4);
+    }
+
+    #[test]
+    fn test_ray_cast_miss_and_short_ray_return_none() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        physics_world
+            .spawn_body(box_spawn(BodyType::Static, 42))
+            .expect("Failed to spawn box");
+
+        // 1. Pointing away from the box: a miss.
+        assert!(
+            physics_world
+                .ray_cast(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, 10.0, 0.0))
+                .is_none()
+        );
+
+        // 2. Pointing at the box but only 2 m long: the ray ends at y = 3,
+        //    while the box's top face is at y = 1. The direction's magnitude
+        //    is the ray's maximum distance.
+        assert!(
+            physics_world
+                .ray_cast(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, -2.0, 0.0))
+                .is_none()
+        );
+
+        // 3. A normalized direction is a 1 m ray: the classic gotcha.
+        assert!(
+            physics_world
+                .ray_cast(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, -1.0, 0.0))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_ray_cast_rejects_invalid_inputs() {
+        let physics_world = PhysicsWorld::new(WorldConfig::default());
+
+        // Non-finite origin, non-finite direction, infinite direction, and a
+        // zero-length direction are all rejected as None before touching Jolt.
+        assert!(
+            physics_world
+                .ray_cast(Vec3::new(f32::NAN, 0.0, 0.0), Vec3::new(0.0, -10.0, 0.0))
+                .is_none()
+        );
+        assert!(
+            physics_world
+                .ray_cast(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, f32::NAN, 0.0))
+                .is_none()
+        );
+        assert!(
+            physics_world
+                .ray_cast(Vec3::new(0.0, 5.0, 0.0), Vec3::new(f32::INFINITY, 0.0, 0.0))
+                .is_none()
+        );
+        assert!(
+            physics_world
+                .ray_cast(Vec3::new(0.0, 5.0, 0.0), Vec3::ZERO)
+                .is_none()
+        );
     }
 
     #[test]
