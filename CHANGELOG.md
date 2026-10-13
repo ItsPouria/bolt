@@ -5,10 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Ray queries: `PhysicsWorld::ray_cast(origin, direction) -> Option<RayHit>` in
+  bolt-core with a delegating method on bolt-bevy's wrapper (#3). `RayHit`
+  carries a slot-table-validated `BodyHandle`, the body's `user_data` payload,
+  the world-space impact point, and the fraction along the ray; the direction's
+  magnitude is the ray's maximum distance. Hits map back to entities via
+  `Entity::from_bits(hit.user_data)`. First fully-safe (no `unsafe`) path to
+  Jolt state, built on rolt's checked query wrappers. Deferred capabilities
+  (surface normals, filters, all-hits) tracked in #9.
 - `PhysicsWorld::user_data(handle)` in bolt-core: the first public reader of
   the per-body payload supplied in `BodySpawn::user_data`, validated against
   the slot table like every other body API. bolt-bevy stores
   `entity.to_bits()` there, so physics results can be mapped back to entities.
+- bolt-bevy now re-exports `BodyHandle` and `RayHit` (crate root and prelude):
+  types returned by its public API are nameable without a direct bolt-core
+  dependency.
 
 ### Safety
 - Removed bolt-bevy's `PhysicsWorld::physics_system()` passthrough (#3):

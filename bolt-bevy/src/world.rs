@@ -10,9 +10,9 @@ use bevy::ecs::resource::Resource;
 use bevy::ecs::world::{FromWorld, World};
 use bevy::log::error;
 use bevy::math::{Quat, Vec3};
-use bolt_core::world::{
-    BodyHandle, BodySpawn, BodyType, PhysicsWorld as CorePhysicsWorld, WorldConfig,
-};
+use bolt_core::world::{BodySpawn, BodyType, PhysicsWorld as CorePhysicsWorld, WorldConfig};
+
+pub use bolt_core::world::{BodyHandle, RayHit};
 
 use crate::components::{Collider, RigidBody};
 use crate::config::PhysicsConfig;
@@ -148,6 +148,17 @@ impl PhysicsWorld {
     /// spawned through bolt-bevy); see [`CorePhysicsWorld::user_data`].
     pub fn user_data(&self, handle: BodyHandle) -> Option<u64> {
         self.0.user_data(handle)
+    }
+
+    /// Casts a ray into the simulation and returns the closest hit, if any;
+    /// see [`CorePhysicsWorld::ray_cast`] for the full contract (notably:
+    /// **the direction's magnitude is the ray's maximum distance**).
+    ///
+    /// Hits translate back to entities through the payload: entities spawned
+    /// by bolt-bevy store `entity.to_bits()` in `user_data`, so
+    /// `Entity::from_bits(hit.user_data)` recovers the hit entity.
+    pub fn ray_cast(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
+        self.0.ray_cast(origin, direction)
     }
 
     /// Destroys the body; see [`CorePhysicsWorld::destroy_body`].

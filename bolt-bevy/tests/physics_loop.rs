@@ -639,3 +639,40 @@ fn test_velocity_write_on_dynamic_body_moves_it() {
         "velocity must be preserved up to linear damping"
     );
 }
+
+#[test]
+fn test_raycast_maps_hit_back_to_entity() {
+    let mut app = physics_test_app();
+
+    let floor = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            RigidBody::Static,
+            Collider::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+        ))
+        .id();
+
+    app.update();
+    advance_time_safely(&mut app, std::time::Duration::from_millis(100));
+
+    // Cast a 10 m ray straight down from 5 m above the floor's top face.
+    let hit = app
+        .world()
+        .resource::<PhysicsWorld>()
+        .ray_cast(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, -10.0, 0.0))
+        .expect("ray must hit the floor");
+
+    // The payload is the spawn-time entity's bits: the hit translates
+    // back to exactly the entity that was struck.
+    assert_eq!(
+        Entity::from_bits(hit.user_data),
+        floor,
+        "raycast hit must map back to the struck entity"
+    );
+    // And the geometry traveled with it: 4 m down a 10 m ray.
+    assert!((hit.fraction - 0.4).abs() < 1e-4);
+    assert!(hit.hit_point.distance(Vec3::new(0.0, 1.0, 0.0)) < 1e-4);
+}
