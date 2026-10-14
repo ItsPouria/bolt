@@ -300,6 +300,11 @@ impl PhysicsWorld {
     /// This is a read-only query: it does not wake bodies or advance the
     /// simulation. It is also the crate's first fully-safe path to Jolt
     /// state (no `unsafe` block), built on rolt's checked query wrappers.
+    ///
+    /// A ray whose origin lies on or inside a body reports that body itself
+    /// at `fraction` 0.0, and closest-hit semantics then shadow everything
+    /// beyond it. When casting from inside your own geometry, start the
+    /// origin past it; body-exclusion filters are not yet available.
     pub fn ray_cast(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
         if !origin.is_finite() || !direction.is_finite() || direction.length_squared() == 0.0 {
             return None;
