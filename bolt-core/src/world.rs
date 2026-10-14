@@ -771,10 +771,12 @@ unsafe impl Send for PhysicsWorld {}
 //   `user_data`, `is_active`, ...) go through Jolt's *locking* body interface
 //   (`JPC_PhysicsSystem_GetBodyInterface`, internally mutex-protected), and
 //   `ray_cast` goes through rolt's `NarrowPhaseQuery`, a read-only view.
-// - The one raw door, the private `body_interface()` helper, is reachable
-//   only from `&mut self` methods that validate handles first; the public
-//   `physics_system()` escape hatch was removed precisely because it let
-//   safe code break this invariant.
+// - The one raw door — the private `body_interface()` helper — never leaves
+//   the crate: only this impl's own methods reach it, readers and writers
+//   alike, each validating handles first (the reads are safe because the
+//   helper returns Jolt's *locking* interface). The public `physics_system()`
+//   escape hatch was removed precisely because it let safe code bypass all
+//   of this.
 // - `step` drives Jolt's own worker threads, but only while the caller
 //   holds `&mut self`, so no `&self` reader can overlap a step.
 // Rust-level exclusivity is the primary guarantee; Jolt's locks are defense
