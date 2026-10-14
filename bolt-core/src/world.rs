@@ -756,13 +756,29 @@ impl Drop for PhysicsWorld {
     }
 }
 
-// SAFETY: The Jolt `PhysicsSystem` is designed for multi-threaded access.
-// SAFETY: The Jolt `PhysicsSystem` and `BodyInterface` are internally synchronized
-// via mutexes (num_body_mutexes). We enforce that `PhysicsWorld` only exposes
-// Jolt state mutation through `&mut self` (exclusive access), ensuring no
-// data races can occur from the Rust side.
+// SAFETY: `PhysicsWorld` owns every C++ resource it touches — the
+// `PhysicsSystem`, the temp allocator, and the job system's worker threads
+// (allocated in `new`, freed only in `Drop`) — and none of them have thread
+// affinity. The Rust-side state (`slots`, `user_data`) is plain data. Moving
+// the world between threads therefore moves everything it depends on with it.
 unsafe impl Send for PhysicsWorld {}
-// SAFETY: See Send justification. Jolt's C++ locks make `&self` reads safe across threads.
+
+// SAFETY: Sharing `&PhysicsWorld` across threads is sound because no public
+// API mutates Jolt state through `&self`:
+// - Every mutating method takes `&mut self`, so the borrow checker rules out
+//   any overlap between mutation and anything else from the Rust side.
+// - The `&self` surface is read-only: body queries (`get_transform`,
+//   `user_data`, `is_active`, ...) go through Jolt's *locking* body interface
+//   (`JPC_PhysicsSystem_GetBodyInterface`, internally mutex-protected), and
+//   `ray_cast` goes through rolt's `NarrowPhaseQuery`, a read-only view.
+// - The one raw door, the private `body_interface()` helper, is reachable
+//   only from `&mut self` methods that validate handles first; the public
+//   `physics_system()` escape hatch was removed precisely because it let
+//   safe code break this invariant.
+// - `step` drives Jolt's own worker threads, but only while the caller
+//   holds `&mut self`, so no `&self` reader can overlap a step.
+// Rust-level exclusivity is the primary guarantee; Jolt's locks are defense
+// in depth.
 unsafe impl Sync for PhysicsWorld {}
 
 #[cfg(test)]
@@ -784,6 +800,16 @@ mod tests {
             user_data,
             use_ccd: false,
         }
+    }
+
+    /// Pins the `Send`/`Sync` promise at compile time: Bevy requires both for
+    /// a `Resource`, and the `unsafe impl`s on `PhysicsWorld` are the manual
+    /// guarantee behind them. If either impl is ever removed, this fails to
+    /// compile.
+    #[test]
+    fn physics_world_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<PhysicsWorld>();
     }
 
     #[test]
