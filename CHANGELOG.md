@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Spawn-time damping control (#8): bolt-bevy gains `LinearDamping`/
+  `AngularDamping` components and bolt-core's `BodySpawn` gains
+  `linear_damping`/`angular_damping` fields (units 1/s; decay law
+  `v(t) = v₀·e^(−d·t)`). Both default to 0.05 — Jolt's own default, via an
+  explicit `Default` impl so `#[require]`-inserted components preserve the
+  behavior bodies previously inherited silently (a derived `Default` would be
+  0.0 and un-damp every existing scene). Damping is **read once at spawn**,
+  like collider scale and CCD; runtime mutation is pending an upstream
+  JoltC API (no `JPC_*Damping` functions exist at the pinned revision).
+- `spawn_body` validation (#8): non-finite or negative damping on either
+  field returns `None` instead of reaching Jolt — Jolt asserts on negative
+  damping (a debug-build process abort), and negative damping adds energy.
+  Shared predicate: `is_finite_and_non_negative` (the rule friction will
+  reuse; restitution clamps instead, so it will not). Four Tier-1 tests pin
+  the contract: a 13-row predicate truth table, negative/NaN/+inf rejection
+  at spawn, and a two-body decay canary. Only damping and shape are
+  validated today — NaN positions/rotations/velocities are still passed
+  through (#7).
 - Ray queries: `PhysicsWorld::ray_cast(origin, direction) -> Option<RayHit>` in
   bolt-core with a delegating method on bolt-bevy's wrapper (#3). `RayHit`
   carries a slot-table-validated `BodyHandle`, the body's `user_data` payload,
@@ -20,6 +38,17 @@ All notable changes to this project will be documented in this file.
 - bolt-bevy now re-exports `BodyHandle` and `RayHit` (crate root and prelude):
   types returned by its public API are nameable without a direct bolt-core
   dependency.
+
+### Changed
+- bolt-bevy's wrapper `spawn_body` collapsed its grown 10-argument signature
+  into a `BodySpawnRequest<'a>` parameter object (#8): a borrowed struct with
+  named fields (entity, collider & scale, pose, velocities, damping, CCD),
+  exported from the prelude. **Breaking:** direct callers construct a
+  `BodySpawnRequest` instead of passing positional arguments. This retires
+  the "Revisit in the Phase 4 API pass" note.
+- `BodySpawn` gained the two damping fields (#8). **Breaking:** full-literal
+  constructions outside the crate must add them (Bolt's own helpers use
+  0.05); struct-update call sites (`..base`) compile untouched.
 
 ### Safety
 - Removed bolt-bevy's `PhysicsWorld::physics_system()` passthrough (#3):
@@ -45,8 +74,8 @@ All notable changes to this project will be documented in this file.
   authority, mid-run gravity changes, hierarchical despawn, config
   precedence, and dynamic-body velocity writes (bolt-bevy ECS).
 - The velocity and gravity tests document that all Bolt bodies carry Jolt's
-  default linear damping (0.05/s); exposing or configuring damping is
-  future work.
+  default linear damping (0.05/s); #8 exposed that default as spawn-time
+  configuration (see Added).
 
 ## [0.2.0] - 2026-10-12
 

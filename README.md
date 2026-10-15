@@ -13,7 +13,7 @@ Bolt is split into two crates with a strict boundary:
 ```mermaid
 flowchart LR
     subgraph bevy ["bolt-bevy"]
-        comp["Bevy components:<br/>RigidBody, Collider, velocities"]
+        comp["Bevy components:<br/>RigidBody, Collider, velocities, damping"]
         wrap["PhysicsWorld resource<br/>(thin translator)"]
     end
 
@@ -25,7 +25,7 @@ flowchart LR
     jolt["Jolt Physics (C++)<br/>reached via rolt and joltc-sys"]
 
     comp --> wrap
-    wrap -->|"BodySpawn: baked geometry,<br/>BodyType, user_data"| world
+    wrap -->|"BodySpawn: baked geometry, BodyType,<br/>velocities, damping, user_data"| world
     world --> shapes
     world -->|"validated BodyHandles, then FFI"| jolt
 ```
