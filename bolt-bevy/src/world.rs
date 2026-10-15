@@ -51,8 +51,10 @@ pub struct BodySpawnRequest<'a> {
     pub collider: &'a Collider,
     /// The entity's world scale, baked into the collider's dimensions.
     pub scale: Vec3,
-    /// The world-space pose of the body's origin.
-    pub transform: (Vec3, Quat),
+    /// The world-space position of the body's origin, in meters.
+    pub position: Vec3,
+    /// The world-space rotation of the body.
+    pub rotation: Quat,
     /// The motion type the body is spawned with.
     pub rigidbody: &'a RigidBody,
     /// The initial linear velocity, in m/s.
@@ -85,7 +87,8 @@ impl PhysicsWorld {
             entity,
             collider,
             scale,
-            transform: (position, rotation),
+            position,
+            rotation,
             rigidbody,
             linear_velocity,
             angular_velocity,
@@ -134,6 +137,7 @@ impl PhysicsWorld {
     }
 
     /// Returns whether the body is awake; see [`CorePhysicsWorld::is_active`].
+    #[must_use]
     pub fn is_active(&self, handle: BodyHandle) -> bool {
         self.0.is_active(handle)
     }
@@ -242,7 +246,8 @@ mod tests {
                     half_extents: Vec3::splat(1.0),
                 },
                 scale: Vec3::ONE,
-                transform: (Vec3::new(1.0, 2.0, 3.0), Quat::IDENTITY),
+                position: Vec3::new(1.0, 2.0, 3.0),
+                rotation: Quat::IDENTITY,
                 rigidbody: &RigidBody::Dynamic,
                 linear_velocity: Vec3::ZERO,
                 angular_velocity: Vec3::ZERO,
