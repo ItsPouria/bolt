@@ -610,6 +610,7 @@ fn test_velocity_write_on_dynamic_body_moves_it() {
             Collider::Box {
                 half_extents: Vec3::splat(0.5),
             },
+            LinearDamping(0.0),
         ))
         .id();
 
@@ -625,18 +626,51 @@ fn test_velocity_write_on_dynamic_body_moves_it() {
     advance_time_safely(&mut app, Duration::from_millis(500));
 
     let transform = app.world().get::<Transform>(entity).unwrap();
-    // Ideal travel is -5 m/s * 0.5 s = -2.5 m; Jolt's default linear damping
-    // (0.05/s) trims it slightly (~-2.47 m). Tolerance keeps the test
-    // meaningful: a dropped velocity write leaves the body at y = 10.
-    assert!(
-        (transform.translation.y - 7.5).abs() < 0.1,
-        "expected ~-2.5 m of travel from the velocity write, got y = {}",
-        transform.translation.y
+    // Zero damping makes the travel analytic: -5 m/s * 0.5 s = -2.5 m
+    // exactly — the fixed timestep is 1/64 s (binary-exact in f32) and
+    // apply_velocities re-writes the velocity every tick, so no tolerance
+    // is needed. A dropped velocity write leaves the body at y = 10.
+    assert_eq!(
+        transform.translation.y, 7.5,
+        "zero damping must make travel analytic: -5 m/s * 0.5 s"
     );
     let velocity = app.world().get::<LinearVelocity>(entity).unwrap();
-    assert!(
-        (velocity.y - (-5.0)).abs() < 0.2,
-        "velocity must be preserved up to linear damping"
+    // With zero damping the engine preserves the written velocity exactly;
+    // any deviation is a bug, not numerical noise.
+    assert_eq!(
+        velocity.y, -5.0,
+        "zero damping must preserve the velocity write bit-for-bit"
+    );
+}
+
+#[test]
+fn test_spawned_body_carries_default_damping() {
+    let mut app = physics_test_app();
+
+    // Spawned without explicit damping components.
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+        ))
+        .id();
+
+    app.update();
+
+    // RigidBody's #[require] injects the damping components at spawn, and
+    // their explicit Default pins Jolt's own 0.05 — a derived Default would
+    // be 0.0 and silently un-damp every existing scene. This is the ECS-side
+    // guarantee behind the zero-behavior-change promise.
+    let linear = app.world().get::<LinearDamping>(entity).unwrap();
+    assert_eq!(**linear, 0.05, "linear damping must default to Jolt's 0.05");
+    let angular = app.world().get::<AngularDamping>(entity).unwrap();
+    assert_eq!(
+        **angular, 0.05,
+        "angular damping must default to Jolt's 0.05"
     );
 }
 
