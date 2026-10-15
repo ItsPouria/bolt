@@ -417,10 +417,12 @@ impl PhysicsWorld {
     /// to a destroyed-and-recycled slot is rejected.
     ///
     /// The explicit [`INVALID_BODY_ID`] check looks redundant: its index
-    /// (8,388,607) sits far beyond any sane `max_bodies`. But if a world
-    /// were ever configured with more slots than Jolt's own `cMaxBodyIndex`,
-    /// that slot could exist and hold a matching value — validating the
-    /// invalid ID. Defensive completeness costs one compare.
+    /// (8,388,607) is the last slot of a maximum-capacity world —
+    /// construction caps `max_bodies` at exactly that many slots
+    /// ([`JOLT_MAX_BODIES`]), so the slot legally exists. If it were ever
+    /// recycled to hold a matching raw value, the index/generation
+    /// comparison alone would validate the invalid ID. Defensive
+    /// completeness costs one compare.
     #[inline]
     fn is_valid(&self, handle: BodyHandle) -> bool {
         let raw = handle.0.raw();
