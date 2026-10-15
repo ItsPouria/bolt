@@ -13,7 +13,8 @@ All notable changes to this project will be documented in this file.
   behavior bodies previously inherited silently (a derived `Default` would be
   0.0 and un-damp every existing scene). Damping is **read once at spawn**,
   like collider scale and CCD; runtime mutation is pending an upstream
-  JoltC API (no `JPC_*Damping` functions exist at the pinned revision).
+  JoltC API (no `JPC_*Damping` functions exist at the pinned revision —
+  tracked upstream as [SecondHalfGames/JoltC#28](https://github.com/SecondHalfGames/JoltC/issues/28)).
 - `spawn_body` validation (#8): non-finite or negative damping on either
   field returns `None` instead of reaching Jolt — Jolt asserts on negative
   damping (a debug-build process abort), and negative damping adds energy.
