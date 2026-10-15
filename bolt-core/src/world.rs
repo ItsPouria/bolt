@@ -144,6 +144,19 @@ pub struct BodySpawn {
     pub use_ccd: bool,
 }
 
+/// Returns `true` when `value` is finite and non-negative — the validity
+/// rule shared by [`BodySpawn`]'s scalar material fields (damping today;
+/// friction, which Jolt likewise asserts non-negative, when it is
+/// exposed — restitution instead clamps, so it will not reuse this).
+///
+/// Both checks are required: `value >= 0.0` alone already rejects `NaN`
+/// (every comparison with `NaN` is false) but still accepts
+/// [`f32::INFINITY`], which would freeze a body on its first step.
+#[must_use]
+fn is_finite_and_non_negative(value: f32) -> bool {
+    value.is_finite() && value >= 0.0
+}
+
 /// An opaque handle to a physics body in a [`PhysicsWorld`].
 ///
 /// Minted by `spawn_body`; cannot be constructed from raw bits. Handles
@@ -421,9 +434,19 @@ impl PhysicsWorld {
 
     /// Spawns a body into the world as described by `spawn`.
     ///
-    /// Returns a handle to the new body, or `None` if the shape could not be
-    /// built or the world's body capacity is full.
+    /// Returns a handle to the new body, or `None` if either damping value
+    /// is negative or non-finite, the shape could not be built, or the
+    /// world's body capacity is full.
     pub fn spawn_body(&mut self, spawn: BodySpawn) -> Option<BodyHandle> {
+        // Damping must be finite and non-negative: Jolt asserts on negative
+        // damping (a debug-build process abort), and negative damping adds
+        // energy — always a bug, never a tuning choice.
+        if !is_finite_and_non_negative(spawn.linear_damping)
+            || !is_finite_and_non_negative(spawn.angular_damping)
+        {
+            return None;
+        }
+
         let shape_ptr = spawn.shape.create()?;
 
         let motion_type = match spawn.body_type {
@@ -480,6 +503,8 @@ impl PhysicsWorld {
             Shape: shape_ptr,
             LinearVelocity: lin_vel,
             AngularVelocity: ang_vel,
+            LinearDamping: spawn.linear_damping,
+            AngularDamping: spawn.angular_damping,
             UserData: spawn.user_data,
             ..Default::default()
         };
@@ -519,6 +544,7 @@ impl PhysicsWorld {
     /// simulated) in Jolt.
     ///
     /// Unknown, invalid, or already-destroyed IDs report `false`.
+    #[must_use]
     pub fn is_active(&self, handle: BodyHandle) -> bool {
         if !self.is_valid(handle) {
             return false;
@@ -804,8 +830,6 @@ unsafe impl Sync for PhysicsWorld {}
 
 #[cfg(test)]
 mod tests {
-    use core::f32;
-
     use super::*;
 
     /// Builds a minimal one-meter box spawn with sensible defaults; tests
