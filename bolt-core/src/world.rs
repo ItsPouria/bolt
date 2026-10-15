@@ -916,6 +916,116 @@ mod tests {
     }
 
     #[test]
+    fn test_is_finite_and_non_negative_truth_table() {
+        // The table is the contract: finiteness and sign, never magnitude.
+        let cases: &[(f32, bool)] = &[
+            // Valid: zero boundary, the Jolt default, ordinary tuning
+            // values, and the finite extremes (no epsilon floor, no
+            // upper bound — huge damping is a user choice, not a bug).
+            (0.0, true),
+            (-0.0, true), // IEEE: -0.0 >= 0.0 — negative zero *is* zero
+            (0.05, true),
+            (1.0, true),
+            (5.0, true),
+            (f32::MIN_POSITIVE, true),
+            (f32::MAX, true),
+            // Invalid: NaN, infinities, and negatives at every magnitude.
+            (f32::NAN, false),
+            (f32::INFINITY, false), // passes `>= 0.0`; only is_finite catches it
+            (f32::NEG_INFINITY, false),
+            (-0.1, false),
+            (-1e-9, false), // no tolerance: any negative adds energy
+            (f32::MIN, false),
+        ];
+
+        // Collect-then-assert so one run reports every misbehaving input.
+        let failures: Vec<f32> = cases
+            .iter()
+            .filter(|&&(value, expected)| is_finite_and_non_negative(value) != expected)
+            .map(|&(value, _)| value)
+            .collect();
+
+        assert!(
+            failures.is_empty(),
+            "predicate returned wrong verdicts for: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn test_spawn_rejects_negative_damping() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.linear_damping = -0.1;
+        assert!(physics_world.spawn_body(spawn).is_none());
+
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.angular_damping = -0.1;
+        assert!(physics_world.spawn_body(spawn).is_none());
+    }
+
+    #[test]
+    fn test_spawn_rejects_non_finite_damping() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.linear_damping = f32::NAN;
+        assert!(physics_world.spawn_body(spawn).is_none());
+
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.angular_damping = f32::NAN;
+        assert!(physics_world.spawn_body(spawn).is_none());
+
+        // +inf passes `>= 0.0`; only the finiteness half of the guard
+        // rejects it (the truth table pins this at the predicate level).
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.linear_damping = f32::INFINITY;
+        assert!(physics_world.spawn_body(spawn).is_none());
+    }
+
+    #[test]
+    fn test_high_linear_damping_decelerates_faster() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        physics_world.set_gravity(Vec3::ZERO);
+
+        // Two dynamic boxes, offset so they never touch, with identical
+        // initial velocities and differing only in linear damping.
+        let default_body = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 0))
+            .expect("default-damping body must spawn");
+        let damped_body = physics_world
+            .spawn_body(BodySpawn {
+                linear_damping: 5.0,
+                position: Vec3::new(0.0, 10.0, 0.0),
+                ..box_spawn(BodyType::Dynamic, 1)
+            })
+            .expect("high-damping body must spawn");
+
+        physics_world.set_linear_velocity(default_body, Vec3::new(10.0, 0.0, 0.0));
+        physics_world.set_linear_velocity(damped_body, Vec3::new(10.0, 0.0, 0.0));
+
+        physics_world.step(0.5, 1);
+
+        let default_speed = physics_world
+            .get_linear_velocity(default_body)
+            .expect("default-damping body must be queryable")
+            .length();
+        let damped_speed = physics_world
+            .get_linear_velocity(damped_body)
+            .expect("high-damping body must be queryable")
+            .length();
+
+        // v(0.5) = v0·e^(−d·0.5): ~9.75 m/s at d = 0.05 vs ~0.82 m/s at
+        // d = 5.0. The 25% threshold sits far from both — and if the
+        // write-through ever regresses, both bodies decay identically and
+        // the ratio approaches 1.
+        assert!(
+            damped_speed < 0.25 * default_speed,
+            "high-damping speed {damped_speed} should be far below default-damping speed {default_speed}"
+        );
+    }
+
+    #[test]
     fn test_get_transform_invalid_and_destroyed_body() {
         let mut physics_world = PhysicsWorld::new(WorldConfig::default());
 
