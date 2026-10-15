@@ -10,6 +10,7 @@
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 
+use crate::init::ensure_jolt_initialized;
 use crate::layers::{
     OBJECT_LAYER_DYNAMIC, OBJECT_LAYER_STATIC, SimpleBroadPhaseLayer, SimpleObjectLayerPairFilter,
     SimpleObjectVsBroadPhaseLayerFilter,
@@ -30,6 +31,14 @@ pub const INVALID_BODY_ID: u32 = 0xffff_ffff;
 /// (`BodyID.h`: `cMaxBodyIndex = 0x7fffff`, shift 23). The index addresses
 /// the slot tables; the sequence detects stale handles.
 const BODY_INDEX_MASK: u32 = 0x007f_ffff;
+
+/// Jolt's hard ceiling on `max_bodies`. `BodyID` packs a 23-bit body index
+/// plus an 8-bit sequence number (`BodyID.h`: `cMaxBodyIndex = 0x7fffff`,
+/// shift 23), so body indices run `0..=cMaxBodyIndex`; per the header,
+/// `cMaxBodyIndex` is "the maximum amount of bodies supported − 1", which
+/// makes the largest usable `max_bodies` exactly one more than the index
+/// mask.
+const JOLT_MAX_BODIES: u32 = BODY_INDEX_MASK + 1;
 
 /// Runtime parameters for constructing a [`PhysicsWorld`].
 ///
@@ -245,8 +254,34 @@ impl PhysicsWorld {
     ///
     /// Initializes the Jolt runtime on first use and starts the job system's
     /// worker threads.
+    ///
+    /// # Panics
+    ///
+    /// - if `max_bodies` is 0 or exceeds Jolt's body ceiling of 8,388,608
+    ///   (`BodyID` packs a 23-bit index: `cMaxBodyIndex` = 8,388,607 is the
+    ///   largest index, not the largest count) — both otherwise abort the
+    ///   process inside Jolt's `PhysicsSystem::Init` with no message
+    /// - if `temp_allocator_size_mb` in bytes overflows `u32`
+    /// - if Jolt's temp allocator or job system allocation fails (out of
+    ///   memory)
+    ///
+    /// `max_body_pairs` and `max_contact_constraints` are legal at 0
+    /// (probed: construction and drop survive).
     pub fn new(config: WorldConfig) -> Self {
-        crate::init::ensure_jolt_initialized();
+        assert!(
+            config.max_bodies > 0,
+            "max_bodies must be at least 1, got 0: Jolt's PhysicsSystem::Init \
+             asserts on zero and aborts the process",
+        );
+        assert!(
+            config.max_bodies <= JOLT_MAX_BODIES,
+            "max_bodies {} exceeds Jolt's hard limit of {} bodies (BodyID \
+             packs a 23-bit index: cMaxBodyIndex = 8,388,607 is the largest \
+             index, not the largest count)",
+            config.max_bodies,
+            JOLT_MAX_BODIES,
+        );
+        ensure_jolt_initialized();
         let mut physics_system = PhysicsSystem::new();
 
         physics_system.init(
@@ -1372,5 +1407,39 @@ mod tests {
             ..Default::default()
         };
         let _ = PhysicsWorld::new(config);
+    }
+
+    #[test]
+    #[should_panic(expected = "max_bodies must be at least 1")]
+    fn test_zero_max_bodies_panics_readably() {
+        let config = WorldConfig {
+            max_bodies: 0,
+            ..Default::default()
+        };
+        let _ = PhysicsWorld::new(config);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds Jolt's hard limit")]
+    fn test_max_bodies_above_jolts_limit_panics_readably() {
+        let config = WorldConfig {
+            max_bodies: JOLT_MAX_BODIES + 1,
+            ..Default::default()
+        };
+        let _ = PhysicsWorld::new(config);
+    }
+
+    #[test]
+    fn test_one_max_bodies_is_the_legal_floor() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig {
+            max_bodies: 1,
+            ..Default::default()
+        });
+        // The floor must be usable, not merely accepted: one body spawns
+        // into the single slot and reads back through its handle.
+        let handle = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 0))
+            .expect("the single slot must spawn a body");
+        assert!(physics_world.get_transform(handle).is_some());
     }
 }
