@@ -52,6 +52,23 @@ All notable changes to this project will be documented in this file.
   0.05); struct-update call sites (`..base`) compile untouched.
 
 ### Safety
+- `PhysicsWorld::new` validates `max_bodies` before any FFI work (#7): `0` and
+  values above Jolt's body ceiling now produce readable Rust panics instead of a
+  message-less process abort (SIGABRT, signal 6, no output) inside Jolt's
+  `PhysicsSystem::Init` — probed before and after with a standalone probe
+  binary. The ceiling is `JOLT_MAX_BODIES` = 8,388,608, derived from Jolt's
+  `BodyID.h`: `BodyID` packs a 23-bit index plus an 8-bit sequence number
+  (shift 23), and `cMaxBodyIndex` = 8,388,607 is the largest body *index* —
+  "the maximum amount of bodies supported − 1" per the header — so the bound
+  deliberately counts bodies, not indices. The cap also keeps the
+  ~12-bytes-per-body slot-table allocation out of bomb magnitudes.
+  `max_body_pairs`/`max_contact_constraints` are legal at `0` (probed:
+  construction and drop survive; no guard owed). A `# Panics` section on `new`
+  now documents all three panic conditions (`max_bodies` pair, temp-allocator
+  overflow, allocation failure), and three Tier-1 tests pin the contract: both
+  rejections via `should_panic(expected)` message-pinning, plus a legal-floor
+  test proving `max_bodies: 1` is usable — a body spawns into the single slot
+  and reads back through its handle.
 - Removed bolt-bevy's `PhysicsWorld::physics_system()` passthrough (#3):
   `rolt` exposes body mutators as safe `&self` methods, so through the
   passthrough safe code could destroy bodies behind the slot table's back
