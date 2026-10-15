@@ -18,6 +18,8 @@ fn box_spawn(body_type: BodyType, half_extents: Vec3, position: Vec3) -> BodySpa
         rotation: Quat::IDENTITY,
         linear_velocity: Vec3::ZERO,
         angular_velocity: Vec3::ZERO,
+        linear_damping: 0.05,
+        angular_damping: 0.05,
         user_data: 0,
         use_ccd: true, // mirrors hello_world: ContinuousCollision on every body
     }

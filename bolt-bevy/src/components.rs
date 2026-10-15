@@ -6,7 +6,13 @@ use bolt_core::world::BodyHandle;
 #[non_exhaustive]
 #[derive(Component, Clone, Debug, Eq, PartialEq, Reflect)]
 #[reflect(Component)]
-#[require(Transform, LinearVelocity, AngularVelocity)]
+#[require(
+    Transform,
+    LinearVelocity,
+    AngularVelocity,
+    LinearDamping,
+    AngularDamping
+)]
 pub enum RigidBody {
     /// A dynamic body affected by forces, gravity, and impulses (e.g. crates, debris).
     Dynamic,
@@ -131,6 +137,45 @@ pub struct LinearVelocity(pub Vec3);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
 #[reflect(Component)]
 pub struct AngularVelocity(pub Vec3);
+
+/// The linear (translational) damping of a rigid body, in inverse seconds.
+///
+/// Velocity decays exponentially as `v(t) = v₀·e^(−d·t)`: the default of
+/// `0.05` (Jolt's own) retains ~97.5% of a body's speed after half a second,
+/// while `0.0` leaves analytic gameplay code (projectile arcs, aiming,
+/// replays) exact. Only meaningful for dynamic bodies.
+///
+/// Read once at spawn — unlike the velocity components, changing this
+/// component after the body exists has no effect until the body is respawned
+/// (runtime damping control is pending an upstream JoltC API). Values must
+/// be finite and non-negative; the world rejects invalid ones at spawn.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Deref, DerefMut, Reflect)]
+#[reflect(Component)]
+pub struct LinearDamping(pub f32);
+
+impl Default for LinearDamping {
+    /// Jolt's own default, so bodies spawned without an explicit damping
+    /// value keep the behavior they previously inherited silently.
+    fn default() -> Self {
+        Self(0.05)
+    }
+}
+
+/// The angular (rotational) damping of a rigid body, in inverse seconds.
+///
+/// Governs spin decay with the same exponential law and rules as
+/// [`LinearDamping`]: `ω(t) = ω₀·e^(−d·t)`, meaningful only for dynamic
+/// bodies, read once at spawn, and finite and non-negative.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Deref, DerefMut, Reflect)]
+#[reflect(Component)]
+pub struct AngularDamping(pub f32);
+
+impl Default for AngularDamping {
+    /// Jolt's own default; see [`LinearDamping`]'s rationale.
+    fn default() -> Self {
+        Self(0.05)
+    }
+}
 
 /// A marker component used to efficiently filter out static bodies from transform synchronization.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]

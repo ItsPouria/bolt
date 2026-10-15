@@ -1,10 +1,12 @@
 use bevy::math::Affine3A;
 use bevy::prelude::*;
 
-use crate::components::{AngularVelocity, JoltBody, LinearVelocity, StaticMarker};
+use crate::components::{
+    AngularDamping, AngularVelocity, JoltBody, LinearDamping, LinearVelocity, StaticMarker,
+};
 use crate::config::PhysicsConfig;
 use crate::prelude::{Collider, RigidBody};
-use crate::world::PhysicsWorld;
+use crate::world::{BodySpawnRequest, PhysicsWorld};
 
 /// System sets for ordering physics execution.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -39,6 +41,8 @@ pub fn spawn_physics_bodies(
             &Collider,
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
+            Option<&LinearDamping>,
+            Option<&AngularDamping>,
             Option<&crate::components::ContinuousCollision>,
         ),
         (Or<(Added<RigidBody>, Added<Collider>)>, Without<JoltBody>),
@@ -46,7 +50,17 @@ pub fn spawn_physics_bodies(
     transform_helper: bevy::transform::helper::TransformHelper,
     mut physics_world: ResMut<PhysicsWorld>,
 ) {
-    for (entity, rigidbody, collider, linear_velocity, angular_velocity, ccd) in query.iter() {
+    for (
+        entity,
+        rigidbody,
+        collider,
+        linear_velocity,
+        angular_velocity,
+        linear_damping,
+        angular_damping,
+        ccd,
+    ) in query.iter()
+    {
         let global = transform_helper
             .compute_global_transform(entity)
             .unwrap_or(GlobalTransform::IDENTITY);
@@ -54,17 +68,23 @@ pub fn spawn_physics_bodies(
 
         let lin_vel = linear_velocity.map(|v| **v).unwrap_or(Vec3::ZERO);
         let ang_vel = angular_velocity.map(|v| **v).unwrap_or(Vec3::ZERO);
+        // `#[require]` guarantees presence on spawned bodies; the fallback
+        // mirrors the components' Jolt-faithful default of 0.05.
+        let lin_damp = linear_damping.map(|d| **d).unwrap_or(0.05);
+        let ang_damp = angular_damping.map(|d| **d).unwrap_or(0.05);
 
-        let body_id = physics_world.spawn_body(
+        let body_id = physics_world.spawn_body(BodySpawnRequest {
             entity,
             collider,
             scale,
-            (position, rotation),
+            transform: (position, rotation),
             rigidbody,
-            lin_vel,
-            ang_vel,
-            ccd.is_some(),
-        );
+            linear_velocity: lin_vel,
+            angular_velocity: ang_vel,
+            linear_damping: lin_damp,
+            angular_damping: ang_damp,
+            use_ccd: ccd.is_some(),
+        });
 
         if let Some(id) = body_id {
             let mut entity_cmds = commands.entity(entity);

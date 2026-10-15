@@ -110,6 +110,25 @@ pub struct BodySpawn {
     pub linear_velocity: Vec3,
     /// The initial angular velocity, in radians per second.
     pub angular_velocity: Vec3,
+    /// The linear (translational) damping coefficient, in inverse seconds.
+    ///
+    /// Velocity decays exponentially as `v(t) = v₀·e^(−d·t)`: with Jolt's own
+    /// default of `0.05`, a body retains ~97.5% of its speed after half a
+    /// second, while `0.0` leaves analytic gameplay code (projectile arcs,
+    /// aiming, replays) exact. Passing `0.05` therefore preserves the
+    /// behavior bodies previously inherited silently. Only meaningful for
+    /// [`BodyType::Dynamic`] bodies; must be finite and non-negative.
+    ///
+    /// Read once at spawn: later changes have no effect on an existing body
+    /// (runtime damping control is pending an upstream JoltC API).
+    pub linear_damping: f32,
+    /// The angular (rotational) damping coefficient, in inverse seconds.
+    ///
+    /// Governs spin decay with the same exponential law and the same rules
+    /// as [`BodySpawn::linear_damping`]: finite, non-negative, meaningful
+    /// only for [`BodyType::Dynamic`] bodies, and read once at spawn. Jolt's
+    /// default is likewise `0.05`.
+    pub angular_damping: f32,
     /// An opaque per-body payload stored inside Jolt and retrievable from
     /// query results.
     ///
@@ -785,6 +804,8 @@ unsafe impl Sync for PhysicsWorld {}
 
 #[cfg(test)]
 mod tests {
+    use core::f32;
+
     use super::*;
 
     /// Builds a minimal one-meter box spawn with sensible defaults; tests
@@ -799,6 +820,8 @@ mod tests {
             rotation: Quat::IDENTITY,
             linear_velocity: Vec3::ZERO,
             angular_velocity: Vec3::ZERO,
+            linear_damping: 0.05,
+            angular_damping: 0.05,
             user_data,
             use_ccd: false,
         }

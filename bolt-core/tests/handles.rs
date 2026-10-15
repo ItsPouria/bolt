@@ -21,6 +21,8 @@ fn dynamic_box() -> BodySpawn {
         rotation: Quat::IDENTITY,
         linear_velocity: Vec3::ZERO,
         angular_velocity: Vec3::ZERO,
+        linear_damping: 0.05,
+        angular_damping: 0.05,
         user_data: 7,
         use_ccd: false,
     }

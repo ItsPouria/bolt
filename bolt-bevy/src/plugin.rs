@@ -25,6 +25,8 @@ impl Plugin for BoltPlugin {
             .register_type::<crate::components::Collider>()
             .register_type::<crate::components::LinearVelocity>()
             .register_type::<crate::components::AngularVelocity>()
+            .register_type::<crate::components::LinearDamping>()
+            .register_type::<crate::components::AngularDamping>()
             .register_type::<crate::components::StaticMarker>()
             .register_type::<crate::config::PhysicsConfig>()
             .register_type::<crate::gravity::Gravity>();

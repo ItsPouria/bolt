@@ -36,32 +36,63 @@ impl From<&PhysicsConfig> for WorldConfig {
     }
 }
 
+/// The Bevy-side parameter object for [`PhysicsWorld::spawn_body`].
+///
+/// Carries everything the wrapper needs to convert one entity's components
+/// into a [`BodySpawn`] for the engine-agnostic core: identity, geometry
+/// inputs (collider in local space plus the world scale that bakes it),
+/// world-space pose, initial motion, and per-body options.
+#[derive(Debug, Clone, Copy)]
+pub struct BodySpawnRequest<'a> {
+    /// The entity the body is spawned for; stored as `entity.to_bits()` in
+    /// the body's `user_data` so query hits map back to entities.
+    pub entity: Entity,
+    /// The collider to bake, in local space; final dimensions apply `scale`.
+    pub collider: &'a Collider,
+    /// The entity's world scale, baked into the collider's dimensions.
+    pub scale: Vec3,
+    /// The world-space pose of the body's origin.
+    pub transform: (Vec3, Quat),
+    /// The motion type the body is spawned with.
+    pub rigidbody: &'a RigidBody,
+    /// The initial linear velocity, in m/s.
+    pub linear_velocity: Vec3,
+    /// The initial angular velocity, in rad/s.
+    pub angular_velocity: Vec3,
+    /// The linear damping coefficient, in 1/s; see
+    /// [`crate::components::LinearDamping`].
+    pub linear_damping: f32,
+    /// The angular damping coefficient, in 1/s; see
+    /// [`crate::components::AngularDamping`].
+    pub angular_damping: f32,
+    /// Whether to enable continuous collision detection.
+    pub use_ccd: bool,
+}
+
 impl PhysicsWorld {
     /// Creates a new physics world resource from the given configuration.
     pub fn new(config: PhysicsConfig) -> Self {
         Self(CorePhysicsWorld::new(WorldConfig::from(&config)))
     }
 
-    /// Spawns a Jolt body for the given entity and returns its ID.
+    /// Spawns a Jolt body for the given entity and returns its handle.
     ///
-    /// Returns `None` (and logs) if the collider's dimensions are invalid
-    /// or the world is at body capacity.
-    // Intentionally preserves the original 9-parameter signature so
-    // `systems.rs` stays untouched mid-refactor; the ergonomic parameter
-    // object (`BodySpawn`) lives in bolt-core. Revisit in the Phase 4 API pass.
-    #[allow(clippy::too_many_arguments)]
-    pub fn spawn_body(
-        &mut self,
-        entity: Entity,
-        collider: &Collider,
-        scale: Vec3,
-        transform: (Vec3, Quat),
-        rigidbody: &RigidBody,
-        linear_velocity: Vec3,
-        angular_velocity: Vec3,
-        use_ccd: bool,
-    ) -> Option<BodyHandle> {
-        let (position, rotation) = transform;
+    /// Returns `None` (and logs) if the collider's dimensions are invalid,
+    /// a damping value is non-finite or negative, or the world is at body
+    /// capacity.
+    pub fn spawn_body(&mut self, request: BodySpawnRequest<'_>) -> Option<BodyHandle> {
+        let BodySpawnRequest {
+            entity,
+            collider,
+            scale,
+            transform: (position, rotation),
+            rigidbody,
+            linear_velocity,
+            angular_velocity,
+            linear_damping,
+            angular_damping,
+            use_ccd,
+        } = request;
 
         let body_type = match rigidbody {
             RigidBody::Dynamic => BodyType::Dynamic,
@@ -76,6 +107,8 @@ impl PhysicsWorld {
             rotation,
             linear_velocity,
             angular_velocity,
+            linear_damping,
+            angular_damping,
             user_data: entity.to_bits(),
             use_ccd,
         };
@@ -203,18 +236,20 @@ mod tests {
     fn test_wrapper_spawns_and_queries_body() {
         let mut world = PhysicsWorld::new(PhysicsConfig::default());
         let body_id = world
-            .spawn_body(
-                Entity::PLACEHOLDER,
-                &Collider::Box {
+            .spawn_body(BodySpawnRequest {
+                entity: Entity::PLACEHOLDER,
+                collider: &Collider::Box {
                     half_extents: Vec3::splat(1.0),
                 },
-                Vec3::ONE,
-                (Vec3::new(1.0, 2.0, 3.0), Quat::IDENTITY),
-                &RigidBody::Dynamic,
-                Vec3::ZERO,
-                Vec3::ZERO,
-                false,
-            )
+                scale: Vec3::ONE,
+                transform: (Vec3::new(1.0, 2.0, 3.0), Quat::IDENTITY),
+                rigidbody: &RigidBody::Dynamic,
+                linear_velocity: Vec3::ZERO,
+                angular_velocity: Vec3::ZERO,
+                linear_damping: 0.05,
+                angular_damping: 0.05,
+                use_ccd: false,
+            })
             .expect("spawn via wrapper must succeed");
 
         let (position, _) = world.get_transform(body_id).unwrap();
