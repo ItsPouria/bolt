@@ -144,6 +144,19 @@ pub fn spawn_physics_bodies(
     }
 }
 
+/// Tracks the system change tick of the most recent [`sync_transforms`] execution
+/// so [`apply_user_transforms`] can skip [`Changed<Transform>`] notifications
+/// that were caused by physics synchronization rather than user modifications.
+///
+/// The exact-tick comparison in [`apply_user_transforms`] is sound because
+/// Bevy allocates a distinct change tick to every system run: a write made by
+/// any system other than `sync_transforms` necessarily lands on a different
+/// tick than the one recorded here.
+/// The type is public only because the systems taking it as a parameter are;
+/// the field is crate-private so callers cannot fabricate or mutate the tick.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct LastPhysicsSyncTick(pub(crate) Option<bevy::ecs::change_detection::Tick>);
+
 /// Synchronizes physics state from the Jolt physics engine back into the Bevy ECS.
 ///
 /// Runs during [`FixedUpdate`] after physics simulation stepping.
@@ -172,8 +185,28 @@ pub fn sync_transforms(
     >,
     parents: Query<&GlobalTransform>,
     physics_world: Res<PhysicsWorld>,
+    last_sync_tick: Option<ResMut<LastPhysicsSyncTick>>,
+    system_change_tick: bevy::ecs::system::SystemChangeTick,
 ) {
+    if let Some(mut sync_tick) = last_sync_tick {
+        sync_tick.0 = Some(system_change_tick.this_run());
+    }
+
     for (mut transform, child_of, body, lin_vel, ang_vel) in query.iter_mut() {
+        if !physics_world.is_active(body.0) {
+            if let Some(mut velocity) = lin_vel {
+                if velocity.0 != Vec3::ZERO {
+                    velocity.bypass_change_detection().0 = Vec3::ZERO;
+                }
+            }
+            if let Some(mut velocity) = ang_vel {
+                if velocity.0 != Vec3::ZERO {
+                    velocity.bypass_change_detection().0 = Vec3::ZERO;
+                }
+            }
+            continue;
+        }
+
         if let Some((world_pos, world_rot)) = physics_world.get_transform(body.0) {
             const POS_EPSILON_SQ: f32 = 1e-6;
             const ROT_EPSILON: f32 = 1e-5;
@@ -199,18 +232,19 @@ pub fn sync_transforms(
                 }
             }
 
-            if let Some(mut velocity) = lin_vel {
-                if let Some(jolt_vel) = physics_world.get_linear_velocity(body.0) {
-                    if velocity.0 != jolt_vel {
-                        velocity.bypass_change_detection().0 = jolt_vel;
+            if lin_vel.is_some() || ang_vel.is_some() {
+                if let Some((jolt_lin_vel, jolt_ang_vel)) =
+                    physics_world.get_linear_and_angular_velocity(body.0)
+                {
+                    if let Some(mut velocity) = lin_vel {
+                        if velocity.0 != jolt_lin_vel {
+                            velocity.bypass_change_detection().0 = jolt_lin_vel;
+                        }
                     }
-                }
-            }
-
-            if let Some(mut velocity) = ang_vel {
-                if let Some(jolt_vel) = physics_world.get_angular_velocity(body.0) {
-                    if velocity.0 != jolt_vel {
-                        velocity.bypass_change_detection().0 = jolt_vel;
+                    if let Some(mut velocity) = ang_vel {
+                        if velocity.0 != jolt_ang_vel {
+                            velocity.bypass_change_detection().0 = jolt_ang_vel;
+                        }
                     }
                 }
             }
@@ -263,27 +297,33 @@ pub fn apply_velocities(
 #[allow(clippy::type_complexity)]
 pub fn apply_user_transforms(
     mut physics_world: ResMut<PhysicsWorld>,
-    query: Query<(Entity, &JoltBody, &Transform, Option<&GlobalTransform>), Changed<Transform>>,
+    query: Query<(Entity, &JoltBody, Ref<Transform>, Option<&ChildOf>), Changed<Transform>>,
     transform_helper: bevy::transform::helper::TransformHelper,
+    last_sync_tick: Option<Res<LastPhysicsSyncTick>>,
 ) {
-    for (entity, body, transform, global_transform) in query.iter() {
-        let (pos, rot) = if let Some(global) = global_transform {
+    let sync_tick = last_sync_tick.and_then(|t| t.0);
+    for (entity, body, transform, child_of) in query.iter() {
+        // Ignore Transform changes that were written by `sync_transforms`
+        if sync_tick == Some(transform.last_changed()) {
+            continue;
+        }
+
+        let (pos, rot) = if child_of.is_some() {
             // Compute accurate world transform for child entities immediately
-            let global = transform_helper
-                .compute_global_transform(entity)
-                .unwrap_or(*global);
-            let (_, rot, pos) = global.to_scale_rotation_translation();
-            (pos, rot)
+            if let Ok(global) = transform_helper.compute_global_transform(entity) {
+                let (_, rot, pos) = global.to_scale_rotation_translation();
+                (pos, rot)
+            } else {
+                (transform.translation, transform.rotation)
+            }
         } else {
             (transform.translation, transform.rotation)
         };
 
-        if let Some((world_pos, world_rot)) = physics_world.get_transform(body.0) {
-            // If the ECS transform diverges from Jolt's authoritative state by a margin,
-            // the user must have modified it manually.
-            if world_pos.distance_squared(pos) > 1e-4 || (1.0 - world_rot.dot(rot).abs()) > 1e-4 {
-                physics_world.set_position_and_rotation(body.0, pos, rot);
-            }
+        if let Some((world_pos, world_rot)) = physics_world.get_transform(body.0)
+            && (world_pos.distance_squared(pos) > 1e-6 || (1.0 - world_rot.dot(rot).abs()) > 1e-5)
+        {
+            physics_world.set_position_and_rotation(body.0, pos, rot);
         }
     }
 }
@@ -360,6 +400,42 @@ mod tests {
 
         let (pos, _) = physics_world.get_transform(jolt_body.0).unwrap();
         assert!(pos.distance(Vec3::new(100.0, 200.0, 300.0)) < 1e-4);
+    }
+
+    #[test]
+    fn test_apply_user_transforms_small_nudge_after_sync() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(BoltPlugin::default());
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Kinematic,
+                Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
+            ))
+            .id();
+
+        use bevy::ecs::system::RunSystemOnce;
+        let _ = app.world_mut().run_system_once(spawn_physics_bodies);
+        app.world_mut().flush();
+        let _ = app.world_mut().run_system_once(sync_transforms);
+
+        // Nudge by 5 mm (< 1 cm, which the old 1e-4 squared distance threshold ignored)
+        {
+            let mut transform = app.world_mut().get_mut::<Transform>(entity).unwrap();
+            transform.translation.x += 0.005;
+        }
+
+        let _ = app.world_mut().run_system_once(apply_user_transforms);
+
+        let physics_world = app.world().get_resource::<PhysicsWorld>().unwrap();
+        let jolt_body = app.world().get::<JoltBody>(entity).unwrap();
+        let (pos, _) = physics_world.get_transform(jolt_body.0).unwrap();
+        assert!((pos.x - 0.005).abs() < 1e-5);
     }
 
     #[test]

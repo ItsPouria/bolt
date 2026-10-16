@@ -19,6 +19,7 @@ impl Plugin for BoltPlugin {
         }
         app.init_resource::<PhysicsWorld>();
         app.init_resource::<Gravity>();
+        app.init_resource::<crate::systems::LastPhysicsSyncTick>();
 
         // Register all reflected physics types
         app.register_type::<crate::components::RigidBody>()
