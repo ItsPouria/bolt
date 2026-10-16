@@ -445,7 +445,11 @@ impl PhysicsWorld {
     ///
     /// Integrations commonly default to `(0.0, -9.81, 0.0)`. The new value
     /// affects all dynamic bodies on subsequent [`step`](Self::step) calls.
+    /// Non-finite vectors are ignored.
     pub fn set_gravity(&mut self, gravity: Vec3) {
+        if !gravity.is_finite() {
+            return;
+        }
         // SAFETY: `physics_system.raw()` returns a valid pointer to the initialized
         // JPC_PhysicsSystem. The JPC_Vec3 struct is correctly initialized with padding.
         unsafe {
@@ -463,14 +467,22 @@ impl PhysicsWorld {
     /// Spawns a body into the world as described by `spawn`.
     ///
     /// Returns a handle to the new body, or `None` if either damping value
-    /// is negative or non-finite, the shape could not be built, or the
-    /// world's body capacity is full.
+    /// is negative or non-finite, the position or velocities are non-finite,
+    /// the rotation is non-finite or unnormalized, the shape could not be
+    /// built, or the world's body capacity is full.
     pub fn spawn_body(&mut self, spawn: BodySpawn) -> Option<BodyHandle> {
         // Damping must be finite and non-negative: Jolt asserts on negative
         // damping (a debug-build process abort), and negative damping adds
         // energy — always a bug, never a tuning choice.
+        // Positions and velocities must be finite, and rotations must be
+        // finite and normalized (Jolt asserts IsNormalized() in debug builds).
         if !is_finite_and_non_negative(spawn.linear_damping)
             || !is_finite_and_non_negative(spawn.angular_damping)
+            || !spawn.position.is_finite()
+            || !spawn.rotation.is_finite()
+            || !spawn.rotation.is_normalized()
+            || !spawn.linear_velocity.is_finite()
+            || !spawn.angular_velocity.is_finite()
         {
             return None;
         }
@@ -591,14 +603,19 @@ impl PhysicsWorld {
     /// Teleports the body to a new world-space position and rotation,
     /// forcefully waking it.
     ///
-    /// Unknown or destroyed IDs are ignored.
+    /// Unknown or destroyed IDs, non-finite positions/rotations, and
+    /// unnormalized rotations are ignored.
     pub fn set_position_and_rotation(
         &mut self,
         handle: BodyHandle,
         position: Vec3,
         rotation: Quat,
     ) {
-        if !self.is_valid(handle) {
+        if !self.is_valid(handle)
+            || !position.is_finite()
+            || !rotation.is_finite()
+            || !rotation.is_normalized()
+        {
             return;
         }
         // SAFETY: body_id is valid and registered.
@@ -716,7 +733,7 @@ impl PhysicsWorld {
     ///
     /// Unknown or already-destroyed IDs are ignored.
     pub fn set_linear_velocity(&mut self, handle: BodyHandle, linear_velocity: Vec3) {
-        if !self.is_valid(handle) {
+        if !self.is_valid(handle) || !linear_velocity.is_finite() {
             return;
         }
         // SAFETY: We verify the body ID is valid and added before mutating its state.
@@ -746,7 +763,7 @@ impl PhysicsWorld {
     ///
     /// Unknown or already-destroyed IDs are ignored.
     pub fn set_angular_velocity(&mut self, handle: BodyHandle, angular_velocity: Vec3) {
-        if !self.is_valid(handle) {
+        if !self.is_valid(handle) || !angular_velocity.is_finite() {
             return;
         }
         // SAFETY: We verify the body ID is valid and added before mutating its state.
@@ -1434,5 +1451,100 @@ mod tests {
             .spawn_body(box_spawn(BodyType::Dynamic, 0))
             .expect("the single slot must spawn a body");
         assert!(physics_world.get_transform(handle).is_some());
+    }
+
+    #[test]
+    fn test_setters_reject_non_finite_inputs() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let handle = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 0))
+            .expect("spawn must succeed");
+
+        let initial_pos = Vec3::new(1.0, 2.0, 3.0);
+        physics_world.set_position_and_rotation(handle, initial_pos, Quat::IDENTITY);
+
+        // Setting NaN position or non-finite/unnormalized rotation must safely no-op
+        physics_world.set_position_and_rotation(
+            handle,
+            Vec3::new(f32::NAN, 0.0, 0.0),
+            Quat::IDENTITY,
+        );
+        let (pos, _) = physics_world.get_transform(handle).unwrap();
+        assert_eq!(pos, initial_pos);
+
+        physics_world.set_position_and_rotation(
+            handle,
+            initial_pos,
+            Quat::from_xyzw(f32::NAN, 0.0, 0.0, 1.0),
+        );
+        let (pos, _) = physics_world.get_transform(handle).unwrap();
+        assert_eq!(pos, initial_pos);
+
+        physics_world.set_position_and_rotation(
+            handle,
+            Vec3::new(9.0, 9.0, 9.0),
+            Quat::from_xyzw(0.0, 0.0, 0.0, 0.0),
+        );
+        let (pos, _) = physics_world.get_transform(handle).unwrap();
+        assert_eq!(pos, initial_pos);
+
+        physics_world.set_position_and_rotation(
+            handle,
+            Vec3::new(9.0, 9.0, 9.0),
+            Quat::from_xyzw(2.0, 0.0, 0.0, 1.0),
+        );
+        let (pos, _) = physics_world.get_transform(handle).unwrap();
+        assert_eq!(pos, initial_pos);
+
+        // Setting NaN velocities must safely no-op
+        let initial_vel = Vec3::new(5.0, 0.0, 0.0);
+        physics_world.set_linear_velocity(handle, initial_vel);
+        physics_world.set_linear_velocity(handle, Vec3::new(f32::NAN, 0.0, 0.0));
+        assert_eq!(
+            physics_world.get_linear_velocity(handle).unwrap(),
+            initial_vel
+        );
+
+        physics_world.set_angular_velocity(handle, initial_vel);
+        physics_world.set_angular_velocity(handle, Vec3::new(0.0, f32::INFINITY, 0.0));
+        assert_eq!(
+            physics_world.get_angular_velocity(handle).unwrap(),
+            initial_vel
+        );
+
+        // Setting non-finite gravity must safely no-op and not poison the simulation
+        physics_world.set_gravity(Vec3::new(0.0, f32::NAN, 0.0));
+        physics_world.step(1.0 / 60.0, 1);
+        let (pos_after, _) = physics_world.get_transform(handle).unwrap();
+        assert!(pos_after.is_finite());
+    }
+
+    #[test]
+    fn test_spawn_body_rejects_non_finite_pose_and_velocities() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.position = Vec3::new(f32::NAN, 0.0, 0.0);
+        assert!(physics_world.spawn_body(spawn).is_none());
+
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.rotation = Quat::from_xyzw(f32::NAN, 0.0, 0.0, 1.0);
+        assert!(physics_world.spawn_body(spawn).is_none());
+
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.rotation = Quat::from_xyzw(0.0, 0.0, 0.0, 0.0);
+        assert!(physics_world.spawn_body(spawn).is_none());
+
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.rotation = Quat::from_xyzw(2.0, 0.0, 0.0, 1.0);
+        assert!(physics_world.spawn_body(spawn).is_none());
+
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.linear_velocity = Vec3::new(0.0, f32::INFINITY, 0.0);
+        assert!(physics_world.spawn_body(spawn).is_none());
+
+        let mut spawn = box_spawn(BodyType::Dynamic, 0);
+        spawn.angular_velocity = Vec3::new(0.0, 0.0, f32::NEG_INFINITY);
+        assert!(physics_world.spawn_body(spawn).is_none());
     }
 }

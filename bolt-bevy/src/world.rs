@@ -80,8 +80,9 @@ impl PhysicsWorld {
     /// Spawns a Jolt body for the given entity and returns its handle.
     ///
     /// Returns `None` (and logs) if the collider's dimensions are invalid,
-    /// a damping value is non-finite or negative, or the world is at body
-    /// capacity.
+    /// a damping value is non-finite or negative, the pose or velocity is
+    /// invalid (non-finite or unnormalized rotation), or the world is at
+    /// body capacity.
     pub fn spawn_body(&mut self, request: BodySpawnRequest<'_>) -> Option<BodyHandle> {
         let BodySpawnRequest {
             entity,
@@ -119,7 +120,7 @@ impl PhysicsWorld {
         let result = self.0.spawn_body(spawn);
         if result.is_none() {
             error!(
-                "Failed to spawn physics body for entity {:?}: invalid collider dimensions or world at capacity",
+                "Failed to spawn physics body for entity {:?}: invalid parameters (geometry, pose, velocity, or damping) or world at capacity",
                 entity
             );
         }
