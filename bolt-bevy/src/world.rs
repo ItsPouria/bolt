@@ -211,13 +211,22 @@ impl PhysicsWorld {
     }
 }
 
+/// Picks up a [`Gravity`](crate::gravity::Gravity) resource if one exists at
+/// construction time — including one the user inserted before adding the
+/// plugin (the plugin initializes `Gravity` before `PhysicsWorld` for exactly
+/// this reason). Gravity changes made afterwards are picked up by
+/// [`apply_gravity`](crate::gravity::apply_gravity) every fixed tick instead.
 impl FromWorld for PhysicsWorld {
     fn from_world(world: &mut World) -> Self {
         let config = world
             .get_resource::<PhysicsConfig>()
             .cloned()
             .unwrap_or_default();
-        Self::new(config)
+        let mut physics_world = Self::new(config);
+        if let Some(gravity) = world.get_resource::<crate::gravity::Gravity>() {
+            physics_world.set_gravity(gravity.0);
+        }
+        physics_world
     }
 }
 

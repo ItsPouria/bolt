@@ -17,8 +17,11 @@ impl Plugin for BoltPlugin {
         if !app.world().contains_resource::<PhysicsConfig>() {
             app.insert_resource(self.config.clone());
         }
-        app.init_resource::<PhysicsWorld>();
+        // Initialize `Gravity` first so `PhysicsWorld`'s `FromWorld` impl
+        // sees a gravity resource at construction time (the plugin default,
+        // or a user-inserted one); later changes flow through `apply_gravity`.
         app.init_resource::<Gravity>();
+        app.init_resource::<PhysicsWorld>();
         app.init_resource::<crate::systems::LastPhysicsSyncTick>();
 
         // Register all reflected physics types
