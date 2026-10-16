@@ -15,15 +15,34 @@ All notable changes to this project will be documented in this file.
   like collider scale and CCD; runtime mutation is pending an upstream
   JoltC API (no `JPC_*Damping` functions exist at the pinned revision —
   tracked upstream as [SecondHalfGames/JoltC#28](https://github.com/SecondHalfGames/JoltC/issues/28)).
-- `spawn_body` validation (#8): non-finite or negative damping on either
-  field returns `None` instead of reaching Jolt — Jolt asserts on negative
-  damping (a debug-build process abort), and negative damping adds energy.
-  Shared predicate: `is_finite_and_non_negative` (the rule friction will
-  reuse; restitution clamps instead, so it will not). Four Tier-1 tests pin
-  the contract: a 13-row predicate truth table, negative/NaN/+inf rejection
-  at spawn, and a two-body decay canary. Only damping and shape are
-  validated today — NaN positions/rotations/velocities are still passed
-  through (#7).
+- `spawn_body` and setter validation (#7, #8): non-finite or negative damping
+  on either field returns `None` instead of reaching Jolt — Jolt asserts on
+  negative damping (a debug-build process abort), and negative damping adds
+  energy. Shared predicate: `is_finite_and_non_negative`. Non-finite positions,
+  rotations, and velocities, as well as unnormalized rotations, are likewise
+  rejected across `spawn_body`, `set_position_and_rotation`,
+  `set_linear_velocity`, `set_angular_velocity`, and `set_gravity`.
+- Thin-primitive support in `bolt-core/src/shapes.rs`: `create_box_shape` and
+  `create_cylinder_shape` clamp `ConvexRadius` (`0.05` m default) down to the
+  shape's smallest half-extent/radius so thin geometry (`< 0.05` m) succeeds
+  instead of failing Jolt's convex-radius check.
+- In-place `RigidBody` and `Collider` mutation/replacement in `bolt-bevy`:
+  `spawn_physics_bodies` reacts to `Changed<RigidBody>` / `Changed<Collider>`,
+  destroying the previous Jolt body and respawning with updated motion type,
+  collider geometry, and `StaticMarker` state. The replacement inherits the
+  previous body's Jolt-side velocities unless the entity carries explicit
+  `LinearVelocity`/`AngularVelocity` components, and the previous body is
+  destroyed only after its replacement exists: a rejected mutation (e.g. an
+  invalid collider) keeps the last-known-good body simulating with a logged
+  warning (fixing the component retries the respawn), while a failed fresh
+  spawn still strips the physics components — now with a warning instead of
+  silence.
+- Negative scale (mirroring) support in `Collider::to_spec`: applies
+  `scale.abs()` so mirrored entities produce positive shape dimensions.
+- `PhysicsWorld`'s `FromWorld` impl picks up a `Gravity` resource inserted
+  before the plugin is added (the plugin now initializes `Gravity` before
+  `PhysicsWorld`); gravity changes after construction continue to flow
+  through `apply_gravity` each fixed tick.
 - Ray queries: `PhysicsWorld::ray_cast(origin, direction) -> Option<RayHit>` in
   bolt-core with a delegating method on bolt-bevy's wrapper (#3). `RayHit`
   carries a slot-table-validated `BodyHandle`, the body's `user_data` payload,
@@ -32,10 +51,11 @@ All notable changes to this project will be documented in this file.
   `Entity::from_bits(hit.user_data)`. First fully-safe (no `unsafe`) path to
   Jolt state, built on rolt's checked query wrappers. Deferred capabilities
   (surface normals, filters, all-hits) tracked in #9.
-- `PhysicsWorld::user_data(handle)` in bolt-core: the first public reader of
-  the per-body payload supplied in `BodySpawn::user_data`, validated against
-  the slot table like every other body API. bolt-bevy stores
-  `entity.to_bits()` there, so physics results can be mapped back to entities.
+- `PhysicsWorld::user_data(handle)` in bolt-core: lock-free O(1) reader of
+  the per-body payload supplied in `BodySpawn::user_data`, backed by a dense
+  table parallel to `slots` and validated against the slot table like every
+  other body API. bolt-bevy stores `entity.to_bits()` there, so physics
+  results can be mapped back to entities.
 - bolt-bevy now re-exports `BodyHandle` and `RayHit` (crate root and prelude):
   types returned by its public API are nameable without a direct bolt-core
   dependency.
@@ -50,25 +70,16 @@ All notable changes to this project will be documented in this file.
 - `BodySpawn` gained the two damping fields (#8). **Breaking:** full-literal
   constructions outside the crate must add them (Bolt's own helpers use
   0.05); struct-update call sites (`..base`) compile untouched.
+- `ShapeSpec::create` is now `pub(crate)`, keeping raw `joltc-sys` shape
+  pointers internal to `bolt-core`.
 
 ### Safety
-- `PhysicsWorld::new` validates `max_bodies` before any FFI work (#7): `0` and
-  values above Jolt's body ceiling now produce readable Rust panics instead of a
-  message-less process abort (SIGABRT, signal 6, no output) inside Jolt's
-  `PhysicsSystem::Init` — probed before and after with a standalone probe
-  binary. The ceiling is `JOLT_MAX_BODIES` = 8,388,608, derived from Jolt's
-  `BodyID.h`: `BodyID` packs a 23-bit index plus an 8-bit sequence number
-  (shift 23), and `cMaxBodyIndex` = 8,388,607 is the largest body *index* —
-  "the maximum amount of bodies supported − 1" per the header — so the bound
-  deliberately counts bodies, not indices. The cap also keeps the
-  ~12-bytes-per-body slot-table allocation out of bomb magnitudes.
-  `max_body_pairs`/`max_contact_constraints` are legal at `0` (probed:
-  construction and drop survive; no guard owed). A `# Panics` section on `new`
-  now documents all three panic conditions (`max_bodies` pair, temp-allocator
-  overflow, allocation failure), and three Tier-1 tests pin the contract: both
-  rejections via `should_panic(expected)` message-pinning, plus a legal-floor
-  test proving `max_bodies: 1` is usable — a body spawns into the single slot
-  and reads back through its handle.
+- `PhysicsWorld::new` validates `max_bodies` and `num_threads` before any FFI
+  work (#7): `max_bodies` of `0` or above Jolt's body ceiling (`JOLT_MAX_BODIES`
+  = 8,388,608) and `num_threads < -1` now produce readable Rust panics instead
+  of a message-less process abort inside Jolt's initialization. A `# Panics`
+  section on `new` documents all panic conditions (`max_bodies` bounds,
+  `num_threads < -1`, temp-allocator overflow, allocation failure).
 - Removed bolt-bevy's `PhysicsWorld::physics_system()` passthrough (#3):
   `rolt` exposes body mutators as safe `&self` methods, so through the
   passthrough safe code could destroy bodies behind the slot table's back
@@ -85,12 +96,15 @@ All notable changes to this project will be documented in this file.
   hatch users must migrate; `user_data` above is the first replacement.
 
 ### Internal
-- Test-suite expansion (#3): slot-recycle and handle-uniqueness tripwires,
-  mixed-body-type teardown, substep clamping (bolt-core white-box);
-  `user_data` contract, capacity exhaustion, and full-surface cross-world
-  safety (bolt-core black-box); `user_data`→entity mapping, static-transform
-  authority, mid-run gravity changes, hierarchical despawn, config
-  precedence, and dynamic-body velocity writes (bolt-bevy ECS).
+- Test-suite expansion (#3, #7, #8): slot-recycle and handle-uniqueness
+  tripwires, mixed-body-type teardown, substep clamping, non-finite pose/velocity
+  rejection, thin-shape convex-radius clamping, and `num_threads` validation
+  (bolt-core white-box); `user_data` contract, capacity exhaustion, and
+  full-surface cross-world safety (bolt-core black-box); `user_data`→entity
+  mapping, static-transform authority, static-to-dynamic transitions (both
+  removal and in-place mutation), mirrored negative scale colliders, mid-run
+  gravity changes, hierarchical despawn, config precedence, and dynamic-body
+  velocity writes (bolt-bevy ECS).
 - The velocity and gravity tests document that all Bolt bodies carry Jolt's
   default linear damping (0.05/s); #8 exposed that default as spawn-time
   configuration (see Added).
