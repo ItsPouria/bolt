@@ -35,7 +35,11 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
 
-    let mut world = PhysicsWorld::new(WorldConfig::default());
+    let config = WorldConfig {
+        max_bodies: (body_count as u32 + 10).max(10240),
+        ..Default::default()
+    };
+    let mut world = PhysicsWorld::new(config);
 
     // Static floor.
     world
