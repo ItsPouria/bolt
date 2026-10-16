@@ -93,7 +93,7 @@ impl ShapeSpec {
     /// non-positive). See the [module documentation][self] for the ownership
     /// contract of the returned pointer: it carries a single reference,
     /// which the caller must transfer to a body or release explicitly.
-    pub fn create(&self) -> Option<*mut JPC_Shape> {
+    pub(crate) fn create(&self) -> Option<*mut JPC_Shape> {
         ensure_jolt_initialized();
         match self {
             ShapeSpec::Box { half_extents } => create_box_shape(*half_extents),
