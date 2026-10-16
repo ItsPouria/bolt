@@ -91,7 +91,9 @@ pub fn spawn_physics_bodies(
             let mut entity_cmds = commands.entity(entity);
             entity_cmds.insert(JoltBody(id));
             if *rigidbody == RigidBody::Static {
-                entity_cmds.insert(crate::components::StaticMarker);
+                entity_cmds.insert(StaticMarker);
+            } else {
+                entity_cmds.remove::<StaticMarker>();
             }
         } else {
             error!("Failed to spawn physics body for entity {:?}", entity);
@@ -201,7 +203,10 @@ pub fn apply_velocities(
     mut physics_world: ResMut<PhysicsWorld>,
     query: Query<
         (&JoltBody, Option<&LinearVelocity>, Option<&AngularVelocity>),
-        Or<(Changed<LinearVelocity>, Changed<AngularVelocity>)>,
+        (
+            Or<(Changed<LinearVelocity>, Changed<AngularVelocity>)>,
+            Without<StaticMarker>,
+        ),
     >,
 ) {
     for (body, lin_vel, ang_vel) in query.iter() {
@@ -257,14 +262,14 @@ pub fn step_physics(
 /// Observer that removes the JoltBody when RigidBody is removed.
 pub fn remove_jolt_body_on_rigidbody_removal(event: On<Remove<RigidBody>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(event.entity) {
-        entity.remove::<JoltBody>();
+        entity.remove::<(JoltBody, StaticMarker)>();
     }
 }
 
 /// Observer that removes the JoltBody when Collider is removed.
 pub fn remove_jolt_body_on_collider_removal(event: On<Remove<Collider>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(event.entity) {
-        entity.remove::<JoltBody>();
+        entity.remove::<(JoltBody, StaticMarker)>();
     }
 }
 
@@ -283,8 +288,6 @@ mod tests {
             .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
                 std::time::Duration::from_secs_f32(1.0 / 60.0),
             ));
-        // In case step 2.5 is not done yet, add it manually
-        app.add_systems(FixedUpdate, apply_user_transforms);
 
         let entity = app
             .world_mut()

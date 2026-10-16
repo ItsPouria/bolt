@@ -710,3 +710,65 @@ fn test_raycast_maps_hit_back_to_entity() {
     assert!((hit.fraction - 0.4).abs() < 1e-4);
     assert!(hit.hit_point.distance(Vec3::new(0.0, 1.0, 0.0)) < 1e-4);
 }
+
+#[test]
+fn test_static_to_dynamic_transition_removes_static_marker_and_syncs() {
+    let mut app = physics_test_app();
+
+    // 1. Spawn a static box at Y = 10.0
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Static,
+            Collider::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+        ))
+        .id();
+
+    app.update();
+    advance_time_safely(&mut app, Duration::from_millis(100));
+
+    // Must have StaticMarker
+    assert!(
+        app.world()
+            .get::<bolt_bevy::components::StaticMarker>(entity)
+            .is_some()
+    );
+    assert_eq!(
+        app.world().get::<Transform>(entity).unwrap().translation.y,
+        10.0
+    );
+
+    // 2. Remove RigidBody and Collider, then replace with Dynamic
+    app.world_mut()
+        .entity_mut(entity)
+        .remove::<RigidBody>()
+        .remove::<Collider>();
+    app.update();
+
+    // StaticMarker must be cleaned up
+    assert!(
+        app.world()
+            .get::<bolt_bevy::components::StaticMarker>(entity)
+            .is_none()
+    );
+
+    // 3. Re-add as Dynamic
+    app.world_mut().entity_mut(entity).insert((
+        RigidBody::Dynamic,
+        Collider::Box {
+            half_extents: Vec3::splat(1.0),
+        },
+    ));
+
+    app.update();
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // Dynamic body must now fall and sync transforms
+    assert!(
+        app.world().get::<Transform>(entity).unwrap().translation.y < 10.0,
+        "Transitioned dynamic body did not fall! StaticMarker may have lingered."
+    );
+}
