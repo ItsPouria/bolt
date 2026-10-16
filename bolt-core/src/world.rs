@@ -335,17 +335,8 @@ impl PhysicsWorld {
         if !self.is_valid(handle) {
             return None;
         }
-        // SAFETY: We verify the body ID is valid and added before querying its state.
-        unsafe {
-            let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, handle.0.raw()) {
-                return None;
-            }
-
-            let data = joltc_sys::JPC_BodyInterface_GetUserData(body_interface, handle.0.raw());
-            Some(data)
-        }
+        let index = (handle.0.raw() & BODY_INDEX_MASK) as usize;
+        Some(self.user_data[index])
     }
 
     /// Casts a ray into the simulation and returns the closest body it
