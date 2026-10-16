@@ -81,6 +81,11 @@ pub enum ShapeSpec {
     },
 }
 
+/// Default convex radius (in meters) used by Jolt to slightly round sharp
+/// edges on boxes and cylinders for contact stability, clamped down when a
+/// shape's smallest dimension is thinner than this value.
+const DEFAULT_CONVEX_RADIUS: f32 = 0.05;
+
 impl ShapeSpec {
     /// Builds the Jolt shape described by this spec.
     ///
@@ -111,10 +116,12 @@ impl ShapeSpec {
 /// each local axis, in meters. Every component must be finite and strictly
 /// positive.
 ///
-/// A convex radius of 0.05 m is applied, rounding the box's edges slightly to
-/// improve the stability of collision detection.
+/// A convex radius of up to 0.05 m (clamped to the smallest half-extent for
+/// thin boxes) is applied, rounding the box's edges slightly to improve the
+/// stability of collision detection.
 pub(crate) fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
-    if !half_extents.is_finite() || half_extents.min_element() <= 0.0 {
+    let min_extent = half_extents.min_element();
+    if !half_extents.is_finite() || min_extent <= 0.0 {
         return None;
     }
 
@@ -128,7 +135,12 @@ pub(crate) fn create_box_shape(half_extents: Vec3) -> Option<*mut JPC_Shape> {
             z: half_extents.z,
             _w: 0.0,
         },
-        ConvexRadius: 0.05,
+        // Clamped down so thin boxes (< 0.05 m) pass Jolt's convex-radius
+        // check. The clamp is intentionally inclusive: a 0.03 m half-extent
+        // yields a convex radius of exactly 0.03 m. The thin-shape tests
+        // below pin this boundary (radius == smallest dimension) as accepted
+        // behavior.
+        ConvexRadius: DEFAULT_CONVEX_RADIUS.min(min_extent),
         ..Default::default()
     };
 
@@ -208,7 +220,8 @@ pub(crate) fn create_capsule_shape(half_height: f32, radius: f32) -> Option<*mut
 /// `radius` is the radius of the circular cross-section. Both are in meters
 /// and must be finite and strictly positive.
 ///
-/// A convex radius of 0.05 m is applied, rounding the cylinder's edges
+/// A convex radius of up to 0.05 m (clamped to the smaller of `half_height`
+/// and `radius` for thin cylinders) is applied, rounding the cylinder's edges
 /// slightly to improve the stability of collision detection.
 pub(crate) fn create_cylinder_shape(half_height: f32, radius: f32) -> Option<*mut JPC_Shape> {
     if radius <= 0.0 || half_height <= 0.0 || !radius.is_finite() || !half_height.is_finite() {
@@ -219,7 +232,10 @@ pub(crate) fn create_cylinder_shape(half_height: f32, radius: f32) -> Option<*mu
     let settings = JPC_CylinderShapeSettings {
         HalfHeight: half_height,
         Radius: radius,
-        ConvexRadius: 0.05,
+        // As with boxes, clamped down for thin cylinders and intentionally
+        // inclusive: the radius may equal the smaller of `half_height` and
+        // `radius`. The thin-shape tests below pin this boundary.
+        ConvexRadius: DEFAULT_CONVEX_RADIUS.min(half_height.min(radius)),
         ..Default::default()
     };
     // SAFETY: `settings` is fully initialized, and `shape`/`err` are valid
@@ -419,5 +435,24 @@ mod tests {
         ensure_jolt_initialized();
         let shape = create_cylinder_shape(-1.0, 0.5);
         assert!(shape.is_none(), "Negative height must return None");
+    }
+
+    #[test]
+    fn test_create_thin_box_and_cylinder_shapes_succeed() {
+        ensure_jolt_initialized();
+
+        // Extents thinner than DEFAULT_CONVEX_RADIUS (0.05 m) must clamp
+        // ConvexRadius down and succeed rather than failing Jolt's check.
+        let thin_box = create_box_shape(Vec3::new(1.0, 0.01, 1.0))
+            .expect("Thin box (half_extent < 0.05) must succeed");
+        assert!(!thin_box.is_null());
+        // SAFETY: `thin_box` is a valid shape created by this factory.
+        unsafe { JPC_Shape_Release(thin_box) };
+
+        let thin_cyl = create_cylinder_shape(0.01, 0.02)
+            .expect("Thin cylinder (dimensions < 0.05) must succeed");
+        assert!(!thin_cyl.is_null());
+        // SAFETY: `thin_cyl` is a valid shape created by this factory.
+        unsafe { JPC_Shape_Release(thin_cyl) };
     }
 }
