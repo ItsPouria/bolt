@@ -806,3 +806,150 @@ fn test_mirrored_negative_scale_collider_spawns_and_falls() {
         "Mirrored body did not fall"
     );
 }
+
+#[test]
+fn test_collider_mutation_preserves_jolt_velocity_without_velocity_components() {
+    let mut app = physics_test_app();
+
+    // No LinearVelocity/AngularVelocity components: Jolt is the only place
+    // this body's velocity lives.
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 50.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+        ))
+        .id();
+
+    // Fall for 0.5 s to build up downward velocity.
+    advance_time_safely(&mut app, Duration::from_millis(500));
+    let y_before = app.world().get::<Transform>(entity).unwrap().translation.y;
+    assert!(y_before < 50.0, "Body must have started falling");
+
+    // Mutate the collider in place: the body is destroyed and respawned.
+    *app.world_mut().get_mut::<Collider>(entity).unwrap() = Collider::Box {
+        half_extents: Vec3::splat(0.6),
+    };
+    advance_time_safely(&mut app, Duration::from_millis(500));
+
+    let y_after = app.world().get::<Transform>(entity).unwrap().translation.y;
+    // A respawn that lost the Jolt-side velocity would freeze the body at
+    // `y_before` (gravity only acts through velocity); it must keep falling.
+    assert!(
+        y_after < y_before - 1.0,
+        "Respawn must preserve Jolt-side velocity: y_before = {y_before}, y_after = {y_after}"
+    );
+}
+
+#[test]
+fn test_failed_respawn_keeps_previous_body_simulating() {
+    let mut app = physics_test_app();
+
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+        ))
+        .id();
+
+    app.update();
+    advance_time_safely(&mut app, Duration::from_millis(100));
+
+    let original_handle = app
+        .world()
+        .get::<JoltBody>(entity)
+        .expect("Body must have spawned")
+        .handle();
+
+    // Mutate to an invalid collider: the respawn must fail...
+    *app.world_mut().get_mut::<Collider>(entity).unwrap() = Collider::Box {
+        half_extents: Vec3::new(1.0, -1.0, 1.0),
+    };
+    advance_time_safely(&mut app, Duration::from_millis(300));
+
+    // ...but the previous body survives and keeps simulating.
+    let jolt_body = app
+        .world()
+        .get::<JoltBody>(entity)
+        .expect("Previous JoltBody must be kept after a failed respawn");
+    assert_eq!(
+        jolt_body.handle(),
+        original_handle,
+        "A failed respawn must not replace or destroy the previous body"
+    );
+    assert!(
+        app.world().get::<Transform>(entity).unwrap().translation.y < 10.0,
+        "The previous body must keep falling after a failed respawn"
+    );
+
+    // Fixing the collider retries the respawn with a fresh handle.
+    *app.world_mut().get_mut::<Collider>(entity).unwrap() = Collider::Box {
+        half_extents: Vec3::splat(1.0),
+    };
+    advance_time_safely(&mut app, Duration::from_millis(300));
+    assert_ne!(
+        app.world().get::<JoltBody>(entity).unwrap().handle(),
+        original_handle,
+        "A valid later mutation must respawn a fresh body"
+    );
+}
+
+#[test]
+fn test_in_place_rigidbody_mutation_respawns_body() {
+    let mut app = physics_test_app();
+
+    // 1. Spawn a static box at Y = 10.0
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Static,
+            Collider::Box {
+                half_extents: Vec3::splat(1.0),
+            },
+        ))
+        .id();
+
+    app.update();
+    advance_time_safely(&mut app, Duration::from_millis(100));
+
+    let original_handle = app
+        .world()
+        .get::<JoltBody>(entity)
+        .expect("Static body must have a JoltBody")
+        .handle();
+    assert!(
+        app.world()
+            .get::<bolt_bevy::components::StaticMarker>(entity)
+            .is_some()
+    );
+
+    // 2. Mutate RigidBody in-place (without removing it first)
+    *app.world_mut().get_mut::<RigidBody>(entity).unwrap() = RigidBody::Dynamic;
+
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // Old handle must be destroyed (or replaced), StaticMarker removed, and body falling
+    assert!(
+        app.world()
+            .get::<bolt_bevy::components::StaticMarker>(entity)
+            .is_none(),
+        "StaticMarker must be removed when RigidBody mutates to Dynamic"
+    );
+    assert!(
+        app.world().get::<Transform>(entity).unwrap().translation.y < 10.0,
+        "In-place transitioned dynamic body must fall under gravity"
+    );
+    let new_handle = app.world().get::<JoltBody>(entity).unwrap().handle();
+    assert_ne!(
+        original_handle, new_handle,
+        "Respawned body must receive a fresh generation handle"
+    );
+}

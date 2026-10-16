@@ -158,6 +158,12 @@ impl PhysicsWorld {
         self.0.get_transform(handle)
     }
 
+    /// Reads the body's linear and angular velocities in a single lock acquisition;
+    /// see [`CorePhysicsWorld::get_linear_and_angular_velocity`].
+    pub fn get_linear_and_angular_velocity(&self, handle: BodyHandle) -> Option<(Vec3, Vec3)> {
+        self.0.get_linear_and_angular_velocity(handle)
+    }
+
     /// Reads the body's linear velocity, in m/s; see
     /// [`CorePhysicsWorld::get_linear_velocity`].
     pub fn get_linear_velocity(&self, handle: BodyHandle) -> Option<Vec3> {

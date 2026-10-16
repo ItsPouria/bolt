@@ -23,14 +23,24 @@ pub enum PhysicsSet {
     SyncTransforms,
 }
 
-/// System that queries newly added [`RigidBody`] entities and creates their corresponding
-/// Jolt physics bodies in the [`PhysicsWorld`].
+/// System that queries newly added or modified [`RigidBody`] / [`Collider`] entities and creates
+/// (or recreates) their corresponding Jolt physics bodies in the [`PhysicsWorld`].
 ///
 /// Coordinates are resolved in world space:
 /// - If [`GlobalTransform`] is available, its world translation and rotation are used.
 /// - Otherwise, the entity's local [`Transform`] is used as a fallback.
 ///
 /// On successful body creation, a [`JoltBody`] component is inserted onto the entity.
+///
+/// Respawn semantics (an existing body is being replaced):
+/// - The previous body is destroyed only after its replacement exists, so a
+///   rejected mutation never tears down a working body.
+/// - The replacement inherits the previous body's Jolt-side velocities unless
+///   the entity carries explicit [`LinearVelocity`]/[`AngularVelocity`]
+///   components.
+/// - If a respawn fails, the previous body and components are kept (a warning
+///   is logged) so the entity keeps simulating; fixing the component retries.
+///   A failed *fresh* spawn removes the physics components instead.
 #[allow(clippy::type_complexity)]
 pub fn spawn_physics_bodies(
     mut commands: Commands,
@@ -39,13 +49,14 @@ pub fn spawn_physics_bodies(
             Entity,
             &RigidBody,
             &Collider,
+            Option<&JoltBody>,
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
             Option<&LinearDamping>,
             Option<&AngularDamping>,
             Option<&crate::components::ContinuousCollision>,
         ),
-        (Or<(Added<RigidBody>, Added<Collider>)>, Without<JoltBody>),
+        Or<(Changed<RigidBody>, Changed<Collider>)>,
     >,
     transform_helper: bevy::transform::helper::TransformHelper,
     mut physics_world: ResMut<PhysicsWorld>,
@@ -54,6 +65,7 @@ pub fn spawn_physics_bodies(
         entity,
         rigidbody,
         collider,
+        existing_body,
         linear_velocity,
         angular_velocity,
         linear_damping,
@@ -61,13 +73,20 @@ pub fn spawn_physics_bodies(
         ccd,
     ) in query.iter()
     {
+        // Capture the Jolt-side velocity before any teardown so a respawn
+        // stays velocity-continuous even when the entity carries no
+        // `LinearVelocity`/`AngularVelocity` components.
+        let (fallback_lin_vel, fallback_ang_vel) = existing_body
+            .and_then(|old| physics_world.get_linear_and_angular_velocity(old.0))
+            .unwrap_or((Vec3::ZERO, Vec3::ZERO));
+
         let global = transform_helper
             .compute_global_transform(entity)
             .unwrap_or(GlobalTransform::IDENTITY);
         let (scale, rotation, position) = global.to_scale_rotation_translation();
 
-        let lin_vel = linear_velocity.map(|v| **v).unwrap_or(Vec3::ZERO);
-        let ang_vel = angular_velocity.map(|v| **v).unwrap_or(Vec3::ZERO);
+        let lin_vel = linear_velocity.map(|v| **v).unwrap_or(fallback_lin_vel);
+        let ang_vel = angular_velocity.map(|v| **v).unwrap_or(fallback_ang_vel);
         // `#[require]` guarantees presence on spawned bodies; the fallback
         // mirrors the components' Jolt-faithful default of 0.05.
         let lin_damp = linear_damping.map(|d| **d).unwrap_or(0.05);
@@ -87,20 +106,40 @@ pub fn spawn_physics_bodies(
             use_ccd: ccd.is_some(),
         });
 
-        if let Some(id) = body_id {
-            let mut entity_cmds = commands.entity(entity);
-            entity_cmds.insert(JoltBody(id));
-            if *rigidbody == RigidBody::Static {
-                entity_cmds.insert(StaticMarker);
-            } else {
-                entity_cmds.remove::<StaticMarker>();
+        match body_id {
+            Some(id) => {
+                // Destroy the previous body only after its replacement exists:
+                // a failed respawn must never tear down a working body.
+                if let Some(old_body) = existing_body {
+                    physics_world.destroy_body(old_body.0);
+                }
+                let mut entity_cmds = commands.entity(entity);
+                entity_cmds.insert(JoltBody(id));
+                if *rigidbody == RigidBody::Static {
+                    entity_cmds.insert(StaticMarker);
+                } else {
+                    entity_cmds.remove::<StaticMarker>();
+                }
             }
-        } else {
-            error!("Failed to spawn physics body for entity {:?}", entity);
-            commands
-                .entity(entity)
-                .remove::<RigidBody>()
-                .remove::<Collider>();
+            None if existing_body.is_some() => {
+                // A mutation was rejected (e.g. an invalid collider). Keep the
+                // last-known-good body and components so the entity keeps
+                // simulating; fixing the component later triggers another
+                // `Changed<...>`-driven respawn attempt.
+                warn!(
+                    "Failed to respawn physics body for entity {:?}; keeping the previous body",
+                    entity
+                );
+            }
+            None => {
+                warn!(
+                    "Failed to spawn physics body for entity {:?}; removing RigidBody and Collider",
+                    entity
+                );
+                commands
+                    .entity(entity)
+                    .remove::<(RigidBody, Collider, JoltBody, StaticMarker)>();
+            }
         }
     }
 }
