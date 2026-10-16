@@ -261,6 +261,7 @@ impl PhysicsWorld {
     ///   (`BodyID` packs a 23-bit index: `cMaxBodyIndex` = 8,388,607 is the
     ///   largest index, not the largest count) — both otherwise abort the
     ///   process inside Jolt's `PhysicsSystem::Init` with no message
+    /// - if `num_threads` is less than `-1` (`-1` requests auto-detection)
     /// - if `temp_allocator_size_mb` in bytes overflows `u32`
     /// - if Jolt's temp allocator or job system allocation fails (out of
     ///   memory)
@@ -280,6 +281,11 @@ impl PhysicsWorld {
              index, not the largest count)",
             config.max_bodies,
             JOLT_MAX_BODIES,
+        );
+        assert!(
+            config.num_threads >= -1,
+            "num_threads must be -1 (auto) or non-negative, got {}",
+            config.num_threads,
         );
         ensure_jolt_initialized();
         let mut physics_system = PhysicsSystem::new();
@@ -1434,6 +1440,16 @@ mod tests {
     fn test_max_bodies_above_jolts_limit_panics_readably() {
         let config = WorldConfig {
             max_bodies: JOLT_MAX_BODIES + 1,
+            ..Default::default()
+        };
+        let _ = PhysicsWorld::new(config);
+    }
+
+    #[test]
+    #[should_panic(expected = "num_threads must be -1 (auto) or non-negative")]
+    fn test_invalid_num_threads_panics_readably() {
+        let config = WorldConfig {
+            num_threads: -2,
             ..Default::default()
         };
         let _ = PhysicsWorld::new(config);
