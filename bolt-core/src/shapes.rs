@@ -27,6 +27,7 @@
 
 use std::ptr;
 
+use crate::init::ensure_jolt_initialized;
 use glam::Vec3;
 use joltc_sys::{
     JPC_BoxShapeSettings, JPC_BoxShapeSettings_Create, JPC_CapsuleShapeSettings,
@@ -88,6 +89,7 @@ impl ShapeSpec {
     /// contract of the returned pointer: it carries a single reference,
     /// which the caller must transfer to a body or release explicitly.
     pub fn create(&self) -> Option<*mut JPC_Shape> {
+        ensure_jolt_initialized();
         match self {
             ShapeSpec::Box { half_extents } => create_box_shape(*half_extents),
             ShapeSpec::Sphere { radius } => create_sphere_shape(*radius),
@@ -160,10 +162,13 @@ pub(crate) fn create_sphere_shape(radius: f32) -> Option<*mut JPC_Shape> {
     // SAFETY: `settings` is fully initialized, and `shape`/`err` are valid
     // out-pointers. The error string, if any, is freed before returning.
     unsafe {
-        JPC_SphereShapeSettings_Create(&settings, &mut shape, &mut err);
-        extract_jolt_error(err);
+        if JPC_SphereShapeSettings_Create(&settings, &mut shape, &mut err) {
+            Some(shape)
+        } else {
+            extract_jolt_error(err);
+            None
+        }
     }
-    if shape.is_null() { None } else { Some(shape) }
 }
 
 /// Creates a capsule shape: a cylinder capped with two hemispheres, aligned
@@ -187,10 +192,13 @@ pub(crate) fn create_capsule_shape(half_height: f32, radius: f32) -> Option<*mut
     // SAFETY: `settings` is fully initialized, and `shape`/`err` are valid
     // out-pointers. The error string, if any, is freed before returning.
     unsafe {
-        JPC_CapsuleShapeSettings_Create(&settings, &mut shape, &mut err);
-        extract_jolt_error(err);
+        if JPC_CapsuleShapeSettings_Create(&settings, &mut shape, &mut err) {
+            Some(shape)
+        } else {
+            extract_jolt_error(err);
+            None
+        }
     }
-    if shape.is_null() { None } else { Some(shape) }
 }
 
 /// Creates a cylinder shape with flat circular end caps, aligned along the
@@ -217,10 +225,13 @@ pub(crate) fn create_cylinder_shape(half_height: f32, radius: f32) -> Option<*mu
     // SAFETY: `settings` is fully initialized, and `shape`/`err` are valid
     // out-pointers. The error string, if any, is freed before returning.
     unsafe {
-        JPC_CylinderShapeSettings_Create(&settings, &mut shape, &mut err);
-        extract_jolt_error(err);
+        if JPC_CylinderShapeSettings_Create(&settings, &mut shape, &mut err) {
+            Some(shape)
+        } else {
+            extract_jolt_error(err);
+            None
+        }
     }
-    if shape.is_null() { None } else { Some(shape) }
 }
 
 /// Converts a Jolt FFI error string into a Rust `String` and frees the C++
