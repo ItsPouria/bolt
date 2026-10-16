@@ -772,3 +772,37 @@ fn test_static_to_dynamic_transition_removes_static_marker_and_syncs() {
         "Transitioned dynamic body did not fall! StaticMarker may have lingered."
     );
 }
+
+#[test]
+fn test_mirrored_negative_scale_collider_spawns_and_falls() {
+    let mut app = physics_test_app();
+
+    // Spawn an entity with single-axis negative scale (mirrored on X: negative
+    // determinant so GlobalTransform::to_scale_rotation_translation preserves
+    // the negative scale component rather than folding a 2-axis reflection
+    // into a 180-degree rotation).
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0).with_scale(Vec3::new(-1.0, 1.0, 1.0)),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+        ))
+        .id();
+
+    app.update();
+    advance_time_safely(&mut app, Duration::from_millis(500));
+
+    // Body should spawn successfully and fall under gravity
+    let jolt_body = app.world().get::<JoltBody>(entity);
+    assert!(
+        jolt_body.is_some(),
+        "Mirrored body failed to spawn into Jolt"
+    );
+    assert!(
+        app.world().get::<Transform>(entity).unwrap().translation.y < 10.0,
+        "Mirrored body did not fall"
+    );
+}

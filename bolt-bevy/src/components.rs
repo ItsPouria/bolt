@@ -84,6 +84,7 @@ impl Collider {
     /// - `Capsule`/`Cylinder` scale height by `scale.y` and radius by the
     ///   larger of `scale.x`/`scale.z`.
     pub(crate) fn to_spec(&self, scale: Vec3) -> ShapeSpec {
+        let scale = scale.abs();
         match self {
             Collider::Box { half_extents } => ShapeSpec::Box {
                 half_extents: *half_extents * scale,
