@@ -595,13 +595,10 @@ impl PhysicsWorld {
         if !self.is_valid(handle) {
             return false;
         }
-        // SAFETY: The body ID occupies a live slot (verified by `is_valid`)
-        // and is confirmed added before querying.
+        // SAFETY: `is_valid` guarantees the body ID occupies a live slot that
+        // was created and added via `CreateAndAddBody` and has not been destroyed.
         unsafe {
             let body_interface = self.body_interface();
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, handle.0.raw()) {
-                return false;
-            }
             joltc_sys::JPC_BodyInterface_IsActive(body_interface, handle.0.raw())
         }
     }
@@ -656,13 +653,9 @@ impl PhysicsWorld {
         if !self.is_valid(handle) {
             return None;
         }
-        // SAFETY: body_id is verified to be valid and allocated in this PhysicsWorld.
+        // SAFETY: `is_valid` guarantees the body ID is allocated and added in this PhysicsWorld.
         unsafe {
             let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, handle.0.raw()) {
-                return None;
-            }
 
             let mut pos = joltc_sys::JPC_Vec3 {
                 x: 0.0,
@@ -691,6 +684,41 @@ impl PhysicsWorld {
         }
     }
 
+    /// Retrieves the body's linear and angular velocity in a single lock acquisition.
+    ///
+    /// Returns `None` for unknown or already-destroyed IDs.
+    pub fn get_linear_and_angular_velocity(&self, handle: BodyHandle) -> Option<(Vec3, Vec3)> {
+        if !self.is_valid(handle) {
+            return None;
+        }
+        // SAFETY: `is_valid` guarantees the body ID is allocated and added in this PhysicsWorld.
+        unsafe {
+            let body_interface = self.body_interface();
+            let mut lin_vel = joltc_sys::JPC_Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                _w: 0.0,
+            };
+            let mut ang_vel = joltc_sys::JPC_Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                _w: 0.0,
+            };
+            joltc_sys::JPC_BodyInterface_GetLinearAndAngularVelocity(
+                body_interface,
+                handle.0.raw(),
+                &mut lin_vel,
+                &mut ang_vel,
+            );
+            Some((
+                Vec3::new(lin_vel.x, lin_vel.y, lin_vel.z),
+                Vec3::new(ang_vel.x, ang_vel.y, ang_vel.z),
+            ))
+        }
+    }
+
     /// Retrieves the body's linear velocity, in meters per second.
     ///
     /// Returns `None` for unknown or already-destroyed IDs.
@@ -698,13 +726,9 @@ impl PhysicsWorld {
         if !self.is_valid(handle) {
             return None;
         }
-        // SAFETY: We verify the body ID is valid and added before querying its state.
+        // SAFETY: `is_valid` guarantees the body ID is allocated and added in this PhysicsWorld.
         unsafe {
             let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, handle.0.raw()) {
-                return None;
-            }
 
             let lin_vel =
                 joltc_sys::JPC_BodyInterface_GetLinearVelocity(body_interface, handle.0.raw());
@@ -720,13 +744,9 @@ impl PhysicsWorld {
         if !self.is_valid(handle) {
             return None;
         }
-        // SAFETY: We verify the body ID is valid and added before querying its state.
+        // SAFETY: `is_valid` guarantees the body ID is allocated and added in this PhysicsWorld.
         unsafe {
             let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, handle.0.raw()) {
-                return None;
-            }
 
             let ang_vel =
                 joltc_sys::JPC_BodyInterface_GetAngularVelocity(body_interface, handle.0.raw());
@@ -742,13 +762,9 @@ impl PhysicsWorld {
         if !self.is_valid(handle) || !linear_velocity.is_finite() {
             return;
         }
-        // SAFETY: We verify the body ID is valid and added before mutating its state.
+        // SAFETY: `is_valid` guarantees the body ID is allocated and added in this PhysicsWorld.
         unsafe {
             let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, handle.0.raw()) {
-                return;
-            }
 
             let jolt_vel = joltc_sys::JPC_Vec3 {
                 x: linear_velocity.x,
@@ -772,13 +788,9 @@ impl PhysicsWorld {
         if !self.is_valid(handle) || !angular_velocity.is_finite() {
             return;
         }
-        // SAFETY: We verify the body ID is valid and added before mutating its state.
+        // SAFETY: `is_valid` guarantees the body ID is allocated and added in this PhysicsWorld.
         unsafe {
             let body_interface = self.body_interface();
-
-            if !joltc_sys::JPC_BodyInterface_IsAdded(body_interface, handle.0.raw()) {
-                return;
-            }
 
             let jolt_vel = joltc_sys::JPC_Vec3 {
                 x: angular_velocity.x,
