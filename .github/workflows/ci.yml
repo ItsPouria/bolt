@@ -21,6 +21,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Check Formatting
         run: cargo fmt --all -- --check
+      - name: Guard bolt-bevy against direct rolt/joltc-sys dependency
+        run: cargo tree -p bolt-bevy --edges normal --depth 1 | grep -E "rolt|joltc" && exit 1 || exit 0
+      - name: Guard bolt-bevy against direct rolt/joltc-sys dependency
+        run: cargo tree -p bolt-bevy --edges normal --depth 1 | grep -E "rolt|joltc" && exit 1 || exit 0
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Docs (broken intra-doc links fail)
