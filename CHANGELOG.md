@@ -128,6 +128,12 @@ All notable changes to this project will be documented in this file.
 - The velocity and gravity tests document that all Bolt bodies carry Jolt's
   default linear damping (0.05/s); #8 exposed that default as spawn-time
   configuration (see Added).
+- Determinism probe (#7, item 5): twin worlds — identical config, spawns,
+  and 120 steps — agree bit-exactly on every body transform, both
+  single-threaded and across a 4-thread job system (0 flakes in 50 runs).
+  The pinned guarantee is deliberately scoped: same-process, same-machine,
+  same-build agreement (replays, lockstep on a fixed platform);
+  cross-machine/cross-platform determinism is not claimed.
 - CI hardening: the dependency guards now fail closed (a `cargo tree` error
   fails the job instead of the guard silently passing) and enforce both
   README invariants — bolt-bevy takes no direct `rolt`/`joltc-sys` edge of
