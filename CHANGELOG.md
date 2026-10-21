@@ -56,6 +56,9 @@ All notable changes to this project will be documented in this file.
   table parallel to `slots` and validated against the slot table like every
   other body API. bolt-bevy stores `entity.to_bits()` there, so physics
   results can be mapped back to entities.
+- `PhysicsWorld::get_linear_and_angular_velocity(handle)` in bolt-core:
+  both velocities behind a single lock acquisition instead of two FFI
+  round-trips; bolt-bevy's transform-sync loop uses it.
 - bolt-bevy now re-exports `BodyHandle` and `RayHit` (crate root and prelude):
   types returned by its public API are nameable without a direct bolt-core
   dependency.
@@ -72,6 +75,23 @@ All notable changes to this project will be documented in this file.
   0.05); struct-update call sites (`..base`) compile untouched.
 - `ShapeSpec::create` is now `pub(crate)`, keeping raw `joltc-sys` shape
   pointers internal to `bolt-core`.
+
+### Fixed
+- Despawning a physics entity no longer logs two spurious warnings (#6):
+  the `Remove<RigidBody>`/`Remove<Collider>` observers queue their
+  `JoltBody`/`StaticMarker` removal mid-despawn while the entity still
+  exists, but the command applies after `despawn()` has finished — exactly
+  the failure mode Bevy 0.20's `EntityCommands::remove` warns on. The
+  observers now use `try_remove` (identical semantics, no warning when the
+  entity is legitimately gone); the spawn path deliberately keeps plain
+  `remove`, where a warning signals a real bug. bolt-bevy's `despawn_quiet`
+  test pins the zero-warnings contract via log capture.
+
+### Performance
+- bolt-core's body getters drop their per-call `IsAdded` FFI pre-checks: a
+  slot-table-valid handle (full index+generation compare) is always an
+  added body — `spawn_body` creates-and-adds and `destroy_body` is the sole
+  removal path — so the extra round-trips were dead checks.
 
 ### Safety
 - `PhysicsWorld::new` validates `max_bodies` and `num_threads` before any FFI
