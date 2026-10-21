@@ -341,14 +341,14 @@ pub fn step_physics(
 /// Observer that removes the JoltBody when RigidBody is removed.
 pub fn remove_jolt_body_on_rigidbody_removal(event: On<Remove<RigidBody>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(event.entity) {
-        entity.remove::<(JoltBody, StaticMarker)>();
+        entity.try_remove::<(JoltBody, StaticMarker)>();
     }
 }
 
 /// Observer that removes the JoltBody when Collider is removed.
 pub fn remove_jolt_body_on_collider_removal(event: On<Remove<Collider>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(event.entity) {
-        entity.remove::<(JoltBody, StaticMarker)>();
+        entity.try_remove::<(JoltBody, StaticMarker)>();
     }
 }
 
