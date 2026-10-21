@@ -1,0 +1,12 @@
+# Shared cargo-nextest configuration (https://nexte.st).
+# The `ci` profile is used by GitHub Actions (`cargo nextest run --profile ci`)
+# and additionally writes a JUnit report consumed by the workflow's artifact
+# upload and PR test-report annotation.
+
+[profile.ci]
+# Don't repeat a failing test's output live and in the final summary.
+failure-output = "immediate-final"
+
+[profile.ci.junit]
+# Written under target/nextest/ci/ by the `ci` profile.
+path = "results.junit.xml"

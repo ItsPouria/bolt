@@ -9,9 +9,36 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Cancel superseded runs on the same branch/PR instead of queueing them.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # The test job publishes JUnit results as a PR check (action-junit-report).
+  checks: write
+
 jobs:
-  test:
-    name: Test and Lint
+  # Fast, dependency-free feedback first: no APT packages, no Rust cache.
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+
+  dep-guard:
+    name: Dependency Guard (bolt-bevy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Forbid direct rolt/joltc-sys dependency
+        run: cargo tree -p bolt-bevy --edges normal --depth 1 | grep -E "rolt|joltc" && exit 1 || exit 0
+
+  clippy:
+    name: Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,15 +46,47 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y pkg-config libx11-dev libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - name: Setup Rust Cache
         uses: Swatinem/rust-cache@v2
-      - name: Check Formatting
-        run: cargo fmt --all -- --check
-      - name: Guard bolt-bevy against direct rolt/joltc-sys dependency
-        run: cargo tree -p bolt-bevy --edges normal --depth 1 | grep -E "rolt|joltc" && exit 1 || exit 0
-      - name: Guard bolt-bevy against direct rolt/joltc-sys dependency
-        run: cargo tree -p bolt-bevy --edges normal --depth 1 | grep -E "rolt|joltc" && exit 1 || exit 0
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install APT dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libx11-dev libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Setup Rust Cache
+        uses: Swatinem/rust-cache@v2
       - name: Docs (broken intra-doc links fail)
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install APT dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libx11-dev libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Setup Rust Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - name: Run tests
-        run: cargo test --workspace --all-targets --verbose
+        run: cargo nextest run --workspace --all-targets --profile ci
+      - name: Upload test results (JUnit)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-junit
+          path: target/nextest/ci/results.junit.xml
+          if-no-files-found: error
+      - name: Publish test report
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: target/nextest/ci/results.junit.xml
+          check_name: Test Report
+          detailed_summary: true
