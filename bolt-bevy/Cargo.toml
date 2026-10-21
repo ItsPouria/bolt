@@ -12,3 +12,6 @@ rust-version = "1.95.0"
 [dependencies]
 bevy = { workspace = true }
 bolt-core = { path = "../bolt-core/" }
+
+[dev-dependencies]
+log = "0.4"
