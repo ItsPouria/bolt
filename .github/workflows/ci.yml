@@ -5,6 +5,7 @@ on:
     branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,32 +15,58 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege by default; only the test job widens this (to publish the
+# JUnit report as a PR check via action-junit-report).
 permissions:
   contents: read
-  # The test job publishes JUnit results as a PR check (action-junit-report).
-  checks: write
 
 jobs:
   # Fast, dependency-free feedback first: no APT packages, no Rust cache.
   fmt:
     name: Formatting
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
   dep-guard:
-    name: Dependency Guard (bolt-bevy)
+    name: Dependency Guards
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Forbid direct rolt/joltc-sys dependency
-        run: cargo tree -p bolt-bevy --edges normal --depth 1 | grep -E "rolt|joltc" && exit 1 || exit 0
+      # Both guards fail closed: if `cargo tree` itself errors (git fetch,
+      # manifest, or lockfile skew), the command-substitution assignment aborts
+      # the step under `set -e` instead of the guard silently passing.
+      # Edges are limited to normal,build,dev — NOT `all`: `all` includes
+      # feature edges, which render as `name feature "x"` lines with no
+      # version and would slip past the version-anchored pattern. The
+      # `── ` prefix anchors matches to dependency entries (including
+      # bevy_*/rolt-* subcrates), so crate names merely containing them as
+      # substrings can't false-positive.
+      - name: Forbid direct rolt/joltc-sys dependency in bolt-bevy
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p bolt-bevy --edges normal,build,dev --depth 1 --locked)
+          if grep -E '── (rolt|joltc-sys)[^ ]* v[0-9]' <<< "$tree"; then
+            echo "::error::bolt-bevy must not depend directly on rolt/joltc-sys (any edge kind)"
+            exit 1
+          fi
+      - name: Forbid any bevy dependency in bolt-core
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p bolt-core --edges normal,build,dev --depth 1 --locked)
+          if grep -E '── bevy[^ ]* v[0-9]' <<< "$tree"; then
+            echo "::error::bolt-core must have zero Bevy dependencies (normal, dev, or build)"
+            exit 1
+          fi
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install APT dependencies
@@ -47,11 +74,12 @@ jobs:
       - name: Setup Rust Cache
         uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
   docs:
     name: Docs
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install APT dependencies
@@ -59,11 +87,16 @@ jobs:
       - name: Setup Rust Cache
         uses: Swatinem/rust-cache@v2
       - name: Docs (broken intra-doc links fail)
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
   test:
     name: Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      # Publish JUnit results as a PR check (action-junit-report).
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - name: Install APT dependencies
@@ -75,7 +108,7 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Run tests
-        run: cargo nextest run --workspace --all-targets --profile ci
+        run: cargo nextest run --workspace --all-targets --profile ci --locked
       - name: Upload test results (JUnit)
         if: always()
         uses: actions/upload-artifact@v4

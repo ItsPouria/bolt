@@ -108,6 +108,12 @@ All notable changes to this project will be documented in this file.
 - The velocity and gravity tests document that all Bolt bodies carry Jolt's
   default linear damping (0.05/s); #8 exposed that default as spawn-time
   configuration (see Added).
+- CI hardening: the dependency guards now fail closed (a `cargo tree` error
+  fails the job instead of the guard silently passing) and enforce both
+  README invariants — bolt-bevy takes no direct `rolt`/`joltc-sys` edge of
+  any kind, and bolt-core stays Bevy-free; cargo invocations run `--locked`
+  so CI tests exactly the committed lockfile; jobs carry explicit timeouts
+  and least-privilege permissions (only the test job may write checks).
 
 ## [0.2.0] - 2026-10-12
 
