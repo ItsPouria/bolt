@@ -134,6 +134,15 @@ All notable changes to this project will be documented in this file.
   The pinned guarantee is deliberately scoped: same-process, same-machine,
   same-build agreement (replays, lockstep on a fixed platform);
   cross-machine/cross-platform determinism is not claimed.
+- ASan CI job (#7, item 4): bolt-core's suite runs on nightly under
+  AddressSanitizer with **both sides of the FFI boundary instrumented** —
+  `RUSTFLAGS` covers the Rust side, `CFLAGS`/`CXXFLAGS` flow through
+  joltc-sys's CMake build into Jolt itself, and both share one ASan
+  runtime at link time. LeakSanitizer rides along by default on Linux, so
+  clean exits double as leak checks for the teardown tests. The explicit
+  (host) `--target` keeps proc-macros and build scripts uninstrumented —
+  rustc rejects sanitizer-instrumented proc-macros. Nightly is a visitor
+  (this job only), not a migration.
 - CI hardening: the dependency guards now fail closed (a `cargo tree` error
   fails the job instead of the guard silently passing) and enforce both
   README invariants — bolt-bevy takes no direct `rolt`/`joltc-sys` edge of

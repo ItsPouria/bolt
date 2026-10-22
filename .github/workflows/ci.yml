@@ -123,3 +123,44 @@ jobs:
           report_paths: target/nextest/ci/results.junit.xml
           check_name: Test Report
           detailed_summary: true
+
+  # bolt-core wraps a C++ runtime; the bug class the normal test job cannot
+  # see is heap corruption on the other side of the FFI boundary (the #3
+  # double-destroy story). This job runs bolt-core's suite under
+  # AddressSanitizer with BOTH sides instrumented: RUSTFLAGS covers Rust,
+  # and CFLAGS/CXXFLAGS flow into Jolt's CMake build (joltc-sys uses the
+  # cmake crate, which initializes CMAKE_*_FLAGS from those env vars), so
+  # libJolt.a itself is compiled with -fsanitize=address and shares rustc's
+  # ASan runtime at link time. LeakSanitizer comes along free on Linux
+  # (on by default with ASan): clean exits double as leak checks for the
+  # teardown tests. Verified locally end-to-end: -fsanitize=address present
+  # in CMake's generated flags.make for both Jolt and JoltC, ~2.9k __asan
+  # symbols in libJolt.a, runtime confirmed active via ASAN_OPTIONS=verbosity=1.
+  #
+  # Two deliberate quirks:
+  # - Nightly-only: -Zsanitizer is an unstable flag. Nothing else in this
+  #   repo moves to nightly — this job is a visitor, not a migration.
+  # - --target names the HOST triple on purpose: with an explicit target,
+  #   cargo applies RUSTFLAGS only to target artifacts, leaving host
+  #   artifacts (proc-macros and build scripts: bindgen, paste) clean —
+  #   rustc refuses to build sanitizer-instrumented proc-macros.
+  asan:
+    name: ASan (bolt-core FFI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Setup Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Separate cache slot: nightly + sanitizer RUSTFLAGS fingerprints
+          # must not mix with the stable jobs' cached artifacts.
+          key: asan
+      - name: Test under AddressSanitizer
+        env:
+          CFLAGS: "-fsanitize=address -fno-omit-frame-pointer"
+          CXXFLAGS: "-fsanitize=address -fno-omit-frame-pointer"
+          RUSTFLAGS: "-Zsanitizer=address"
+        run: cargo +nightly test -p bolt-core --locked --target x86_64-unknown-linux-gnu
