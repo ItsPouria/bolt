@@ -953,3 +953,71 @@ fn test_in_place_rigidbody_mutation_respawns_body() {
         "Respawned body must receive a fresh generation handle"
     );
 }
+
+#[test]
+fn test_child_of_moving_parent_holds_world_position() {
+    let mut app = physics_test_app();
+
+    app.world_mut().insert_resource(Gravity(Vec3::ZERO));
+
+    // Parent: a dynamic box drifting at 1 m/s in +x. The drift happens
+    // *inside* FixedUpdate — exactly when sync_transforms reads the parent
+    // frame — and zero gravity means nothing else moves it.
+    let parent = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+            LinearVelocity(Vec3::new(1.0, 0.0, 0.0)),
+        ))
+        .id();
+
+    // Child: a dynamic box parented under it, offset 2 m in local x so the
+    // colliders never overlap (overlapping dynamic boxes would be pushed
+    // apart by the contact solver — legitimate physics that would poison
+    // the measurement). It spawns at world (2, 10, 0); no forces act on
+    // it, so Jolt must keep it there while the parent drifts away.
+    let child = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(2.0, 0.0, 0.0),
+            ChildOf(parent),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.25),
+            },
+        ))
+        .id();
+
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // Precondition: the parent must actually have drifted, or this test
+    // proves nothing. Observed: ~0.87 m in 1 s (the naive damping integral
+    // predicts 0.975 m; the ~11% gap is unexplained but irrelevant here —
+    // the gate only needs "the parent moved meaningfully every tick").
+    let parent_global = app.world().get::<GlobalTransform>(parent).unwrap();
+    assert!(
+        parent_global.translation().x > 0.8,
+        "precondition failed: parent barely moved (x = {}); \
+         the stale-parent bug cannot trigger without parent motion",
+        parent_global.translation().x
+    );
+
+    // The claim: a force-free body holds its world position while its
+    // parent moves. With the stale-parent-frame bug, each tick's local
+    // conversion is wrong by the parent's per-tick motion and
+    // apply_user_transforms feeds that error back into Jolt, so the child
+    // is dragged along with the parent.
+    let child_global = app.world().get::<GlobalTransform>(child).unwrap();
+    assert!(
+        child_global
+            .translation()
+            .distance(Vec3::new(2.0, 10.0, 0.0))
+            < 1e-3,
+        "child drifted with its parent: world position {} vs spawn (2, 10, 0)",
+        child_global.translation()
+    );
+}
