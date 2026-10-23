@@ -86,6 +86,30 @@ All notable changes to this project will be documented in this file.
   entity is legitimately gone); the spawn path deliberately keeps plain
   `remove`, where a warning signals a real bug. bolt-bevy's `despawn_quiet`
   test pins the zero-warnings contract via log capture.
+- Children of moving parents no longer drift with them (#4):
+  `sync_transforms` converted Jolt world coordinates into the parent's
+  local frame using the parent's `GlobalTransform` component — one
+  propagation behind inside `FixedUpdate` — and `apply_user_transforms`
+  fed each tick's resulting error back into Jolt as teleports, compounding
+  it (a force-free dynamic child drifted ~0.48 m along with a 1 m/s
+  parent over 1 s). The parent frame is now computed fresh inside the tick
+  by `compute_world_affine`: a parent that is a physics body contributes
+  its authoritative Jolt pose directly (already world-space, so ancestor
+  walks stop at the first body), and plain non-physics parents compose up
+  a `Without<RigidBody>`-filtered query — disjoint from the system's
+  `&mut Transform` by construction. That disjointness is what makes a
+  fresh frame possible at all: a `TransformHelper` in this system panics
+  with B0001 (it reads every `Transform` in the world), so the old stale-
+  component read was the only conflict-free option a single-pass writer
+  had. Pinned by `test_child_of_moving_parent_holds_world_position`.
+- Sleeping bodies keep their ECS mirror synced (#4): `sync_transforms`
+  used to skip inactive bodies entirely, freezing a sleeping child's
+  local `Transform` while its parent's frame kept moving — invisible
+  until the drift fix landed, because the stale-frame bug's spurious
+  teleports had kept children artificially awake (a force-free dynamic
+  body sleeps after 0.5 s). Transform sync now runs for sleeping bodies
+  too — their Jolt pose is fixed but the parent's frame may be moving —
+  while only velocity mirroring stays gated on `is_active`.
 
 ### Performance
 - bolt-core's body getters drop their per-call `IsAdded` FFI pre-checks: a
