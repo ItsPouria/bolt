@@ -58,7 +58,7 @@ pub fn spawn_physics_bodies(
         ),
         Or<(Changed<RigidBody>, Changed<Collider>)>,
     >,
-    transform_helper: bevy::transform::helper::TransformHelper,
+    transform_helper: TransformHelper,
     mut physics_world: ResMut<PhysicsWorld>,
 ) {
     for (
@@ -163,9 +163,19 @@ pub struct LastPhysicsSyncTick(pub(crate) Option<bevy::ecs::change_detection::Ti
 ///
 /// ### Transforms & Hierarchy Handling:
 /// - **Root Entities**: Jolt world-space coordinates are written directly to [`Transform`].
-/// - **Child Entities** (entities with [`ChildOf`]): Jolt world coordinates are transformed
-///   into the parent's local coordinate frame using the inverse of the parent's [`GlobalTransform`].
-///   This prevents double-transformation when Bevy propagates transforms down the hierarchy.
+/// - **Child Entities** (entities with [`ChildOf`]): Jolt world coordinates are
+///   transformed into the parent's local coordinate frame using the inverse of the
+///   parent's world frame, computed fresh inside the tick by
+///   [`compute_world_affine`]: a parent that is a physics body contributes its
+///   authoritative Jolt pose (already world-space), while a plain non-physics
+///   parent is composed up its ancestor chain, stopping at the first physics
+///   body. The [`GlobalTransform`] component is deliberately never read here —
+///   propagation refreshes it only in [`PostUpdate`], so during [`FixedUpdate`]
+///   it is one frame behind a moving parent, and dividing out a stale frame
+///   drags children along with the parent (fed back into Jolt as teleports).
+///   The plain-ancestor query is filtered `Without<RigidBody>`, keeping its
+///   reads disjoint from this system's `&mut Transform` — fresh data with no
+///   borrow conflict.
 ///
 /// ### Velocities:
 /// If the entity possesses a [`LinearVelocity`] or [`AngularVelocity`] component, it will be
@@ -183,7 +193,15 @@ pub fn sync_transforms(
         ),
         (With<RigidBody>, Without<StaticMarker>),
     >,
-    parents: Query<&GlobalTransform>,
+    // Parents that are physics bodies: their world pose comes from Jolt
+    // directly — fresher than any ECS read, and it touches no `Transform`,
+    // so it cannot conflict with the `&mut Transform` above.
+    parent_bodies: Query<&JoltBody, With<RigidBody>>,
+    // Non-physics ancestors only. `Without<RigidBody>` keeps this query's
+    // `&Transform` reads disjoint from the `&mut Transform` above by
+    // construction — a fresh parent frame without a B0001 borrow conflict
+    // and without a `ParamSet`.
+    plain_hierarchy: Query<(Option<&ChildOf>, &Transform), Without<RigidBody>>,
     physics_world: Res<PhysicsWorld>,
     last_sync_tick: Option<ResMut<LastPhysicsSyncTick>>,
     system_change_tick: bevy::ecs::system::SystemChangeTick,
@@ -192,28 +210,40 @@ pub fn sync_transforms(
         sync_tick.0 = Some(system_change_tick.this_run());
     }
 
-    for (mut transform, child_of, body, lin_vel, ang_vel) in query.iter_mut() {
-        if !physics_world.is_active(body.0) {
-            if let Some(mut velocity) = lin_vel {
+    for (mut transform, child_of, body, mut lin_vel, mut ang_vel) in query.iter_mut() {
+        let active = physics_world.is_active(body.0);
+
+        if !active {
+            // A sleeping (or otherwise inactive) body has no Jolt-side
+            // velocity to mirror: zero the components without tripping
+            // change detection, as user code never wrote them.
+            if let Some(velocity) = lin_vel.as_mut() {
                 if velocity.0 != Vec3::ZERO {
                     velocity.bypass_change_detection().0 = Vec3::ZERO;
                 }
             }
-            if let Some(mut velocity) = ang_vel {
+            if let Some(velocity) = ang_vel.as_mut() {
                 if velocity.0 != Vec3::ZERO {
                     velocity.bypass_change_detection().0 = Vec3::ZERO;
                 }
             }
-            continue;
         }
 
+        // Transform sync runs for sleeping bodies too: a sleeping body's
+        // Jolt pose is fixed, but its parent's frame may be moving, and the
+        // local re-expression must continue or the ECS mirror drifts along
+        // with the parent (#4). Stale handles return None and skip all of
+        // this; a sleeping root body compares equal and writes nothing.
         if let Some((world_pos, world_rot)) = physics_world.get_transform(body.0) {
             const POS_EPSILON_SQ: f32 = 1e-6;
             const ROT_EPSILON: f32 = 1e-5;
 
-            if let Some(parent_global) = child_of.and_then(|c| parents.get(c.parent()).ok()) {
+            let parent_affine = child_of.and_then(|c| {
+                compute_world_affine(c.parent(), &parent_bodies, &plain_hierarchy, &physics_world)
+            });
+            if let Some(parent_affine) = parent_affine {
                 let world_affine = Affine3A::from_rotation_translation(world_rot, world_pos);
-                let local_affine = parent_global.affine().inverse() * world_affine;
+                let local_affine = parent_affine.inverse() * world_affine;
                 let (_, local_rotation, local_translation) =
                     local_affine.to_scale_rotation_translation();
 
@@ -232,7 +262,7 @@ pub fn sync_transforms(
                 }
             }
 
-            if lin_vel.is_some() || ang_vel.is_some() {
+            if active && (lin_vel.is_some() || ang_vel.is_some()) {
                 if let Some((jolt_lin_vel, jolt_ang_vel)) =
                     physics_world.get_linear_and_angular_velocity(body.0)
                 {
@@ -250,6 +280,53 @@ pub fn sync_transforms(
             }
         }
     }
+}
+
+/// Computes an entity's world-space [`Affine3A`] for parent-frame conversion
+/// in [`sync_transforms`], without borrow conflicts: an entity carrying a
+/// [`JoltBody`] contributes its authoritative Jolt pose — already
+/// world-space, so the walk stops there — while a plain (non-physics) entity
+/// composes its local [`Transform`] up through ancestors until it reaches
+/// the root or the first physics body.
+///
+/// The `plain_hierarchy` query is filtered `Without<RigidBody>`, so its
+/// `&Transform` reads are disjoint from `sync_transforms`' `&mut Transform`
+/// by construction — the disjointness that makes a fresh parent frame
+/// possible without a `ParamSet` (a `TransformHelper` here would panic with
+/// B0001: it reads every `Transform` in the world).
+fn compute_world_affine(
+    entity: Entity,
+    parent_bodies: &Query<&JoltBody, With<RigidBody>>,
+    plain_hierarchy: &Query<(Option<&ChildOf>, &Transform), Without<RigidBody>>,
+    physics_world: &PhysicsWorld,
+) -> Option<Affine3A> {
+    // Physics body: its Jolt pose *is* its world transform.
+    if let Ok(body) = parent_bodies.get(entity) {
+        return physics_world
+            .get_transform(body.0)
+            .map(|(pos, rot)| Affine3A::from_rotation_translation(rot, pos));
+    }
+
+    // Plain entity: compose its local transform up the ancestor chain.
+    let (child_of, transform) = plain_hierarchy.get(entity).ok()?;
+    let mut affine = transform.compute_affine();
+    let mut ancestor = child_of.map(|child_of| child_of.parent());
+
+    while let Some(entity) = ancestor {
+        if let Ok(body) = parent_bodies.get(entity) {
+            // A physics ancestor's Jolt pose is world-space: compose it in
+            // front and stop — nothing above it can change the result.
+            let (pos, rot) = physics_world.get_transform(body.0)?;
+            affine = Affine3A::from_rotation_translation(rot, pos) * affine;
+            break;
+        }
+
+        let (ancestor_child_of, ancestor_transform) = plain_hierarchy.get(entity).ok()?;
+        affine = ancestor_transform.compute_affine() * affine;
+        ancestor = ancestor_child_of.map(|child_of| child_of.parent());
+    }
+
+    Some(affine)
 }
 
 /// Lifecycle observer that removes and destroys Jolt physics bodies when their
@@ -298,7 +375,7 @@ pub fn apply_velocities(
 pub fn apply_user_transforms(
     mut physics_world: ResMut<PhysicsWorld>,
     query: Query<(Entity, &JoltBody, Ref<Transform>, Option<&ChildOf>), Changed<Transform>>,
-    transform_helper: bevy::transform::helper::TransformHelper,
+    transform_helper: TransformHelper,
     last_sync_tick: Option<Res<LastPhysicsSyncTick>>,
 ) {
     let sync_tick = last_sync_tick.and_then(|t| t.0);
