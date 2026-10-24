@@ -995,9 +995,10 @@ fn test_child_of_moving_parent_holds_world_position() {
     advance_time_safely(&mut app, Duration::from_secs(1));
 
     // Precondition: the parent must actually have drifted, or this test
-    // proves nothing. Observed: ~0.87 m in 1 s (the naive damping integral
-    // predicts 0.975 m; the ~11% gap is unexplained but irrelevant here —
-    // the gate only needs "the parent moved meaningfully every tick").
+    // proves nothing. The naive damping integral predicts 0.975 m; observed
+    // ~0.87 m = 0.975 × (~57.6/64) — the manual clock's zero-tick first
+    // update costs ~10% of the ticks. The gate only needs "the parent moved
+    // meaningfully every tick".
     let parent_global = app.world().get::<GlobalTransform>(parent).unwrap();
     assert!(
         parent_global.translation().x > 0.8,
@@ -1019,5 +1020,273 @@ fn test_child_of_moving_parent_holds_world_position() {
             < 1e-3,
         "child drifted with its parent: world position {} vs spawn (2, 10, 0)",
         child_global.translation()
+    );
+}
+
+/// Test-only marker: a plain (non-physics) entity moved by user "script"
+/// each frame, to exercise sync's plain-hierarchy ancestor walk.
+#[derive(Component)]
+struct MovingPlainParent;
+
+/// Moves inside FixedUpdate (before Bolt's sets) so the motion lands in
+/// the same tick sync composes against. Moving it in `Update` instead
+/// leaves the child's ECS mirror one frame behind (sync composes the
+/// local before Update moves the parent; propagation composes it after)
+/// — constant one-step latency, not drift; physics stays correct.
+fn move_plain_parent_left(
+    time: Res<Time<Fixed>>,
+    mut parents: Query<&mut Transform, With<MovingPlainParent>>,
+) {
+    for mut transform in &mut parents {
+        transform.translation.x -= time.delta_secs();
+    }
+}
+
+#[test]
+fn test_child_of_rotated_static_parent_holds_world_position() {
+    let mut app = physics_test_app();
+
+    app.world_mut().insert_resource(Gravity(Vec3::ZERO));
+
+    // Static parent box rotated +90° about Y: the child's local +X points
+    // at world -Z. Every existing hierarchy test is axis-aligned; this one
+    // exercises the full rotation round-trip — spawn local → world → Jolt →
+    // sync's inverse-affine conversion → propagation → world again.
+    let parent = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0)
+                .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+            RigidBody::Static,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+        ))
+        .id();
+
+    let child = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(2.0, 0.0, 0.0),
+            ChildOf(parent),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.25),
+            },
+        ))
+        .id();
+
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // Precondition: the child spawned where the rotated frame puts it —
+    // (0, 10, -2), not the naive (2, 10, 0).
+    // Claim: it stays there (nothing acts on it; the parent never moves).
+    let child_global = app.world().get::<GlobalTransform>(child).unwrap();
+    assert!(
+        child_global
+            .translation()
+            .distance(Vec3::new(0.0, 10.0, -2.0))
+            < 1e-3,
+        "child did not hold its rotated-frame world position: {}",
+        child_global.translation()
+    );
+}
+
+#[test]
+fn test_child_of_moving_plain_parent_holds_world_position() {
+    let mut app = physics_test_app();
+
+    app.world_mut().insert_resource(Gravity(Vec3::ZERO));
+
+    // A NON-physics parent (no RigidBody/Collider) moved by a script each
+    // frame — the plain-hierarchy branch of compute_world_affine, which no
+    // other pipeline test exercises. The child is a physics body: physics
+    // owns its world position, so it must stay put while the parent recedes
+    // and only its LOCAL spelling changes. The run is 1 s, so the child
+    // also falls asleep at the 0.5 s mark mid-test — sleeping sync with a
+    // moving parent frame, exercised together.
+    let parent = app
+        .world_mut()
+        .spawn((Transform::from_xyz(0.0, 10.0, 0.0), MovingPlainParent))
+        .id();
+
+    let child = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(2.0, 0.0, 0.0),
+            ChildOf(parent),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.25),
+            },
+        ))
+        .id();
+
+    // Warm-up BEFORE the script attaches: the child's authoritative world
+    // pose is locked in when Bolt's spawn system first processes it. If the
+    // parent's script has already run by then, the initial pose inherits
+    // that moved frame (a one-tick-earlier initial condition — not drift,
+    // not lag; physics holds whatever pose it spawned with forever). Pump
+    // updates with the parent stationary so the locked pose is exactly
+    // (2, 10, 0), then start the script. 200 ms guarantees at least one
+    // fixed run even though a manual clock's very first update can run
+    // zero.
+    advance_time_safely(&mut app, Duration::from_millis(200));
+
+    app.add_systems(
+        FixedUpdate,
+        move_plain_parent_left.before(bolt_bevy::systems::PhysicsSet::Spawn),
+    );
+
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // Precondition: the plain parent actually receded. The warm-up above
+    // absorbed the zero-tick first update, so the scripted second runs at
+    // full tick count (~1 m); 0.8 stays a floor against jitter.
+    let parent_x = app.world().get::<Transform>(parent).unwrap().translation.x;
+    assert!(
+        parent_x < -0.8,
+        "precondition failed: plain parent barely moved (x = {parent_x})"
+    );
+
+    // The claim: the child's world position is physics-owned — held to the
+    // millimeter for the full second while the plain parent recedes, the
+    // ECS mirror tracking Jolt exactly (probe-verified: ecs_global ==
+    // Jolt pose every update; only the local spelling changes).
+    let child_global = app.world().get::<GlobalTransform>(child).unwrap();
+    assert!(
+        child_global
+            .translation()
+            .distance(Vec3::new(2.0, 10.0, 0.0))
+            < 1e-3,
+        "child drifted with its plain parent: {}",
+        child_global.translation()
+    );
+
+    // …while its LOCAL spelling grew by the parent's travel (~3.0 = 2.0
+    // local + 1.0 m of parent recession), proving the local re-expression
+    // keeps running through the walk and through sleep.
+    let child_local_x = app.world().get::<Transform>(child).unwrap().translation.x;
+    let expected_local_x = 2.0 - parent_x;
+    assert!(
+        child_local_x > expected_local_x - 0.1,
+        "child local not re-expressed against the receding parent: \
+         {child_local_x} (expected ≈ {expected_local_x})"
+    );
+}
+
+#[test]
+fn test_child_of_rotated_moving_parent_holds_world_position() {
+    let mut app = physics_test_app();
+
+    app.world_mut().insert_resource(Gravity(Vec3::ZERO));
+
+    // A dynamic parent rotated +90° about Y, drifting at 1 m/s in +x. The
+    // child's local offset (2, 0, 0) therefore points at world −z, and the
+    // parent's travel is perpendicular to that offset, so the colliders
+    // never meet. Unlike the rotated-static variant, the parent frame
+    // TRANSLATES every tick, forcing sync's world→local inverse-affine
+    // write path through a rotation on every tick — the static variant
+    // only ever exercises the computation (epsilon skips the writes).
+    let parent = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0)
+                .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+            LinearVelocity(Vec3::new(1.0, 0.0, 0.0)),
+        ))
+        .id();
+
+    let child = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(2.0, 0.0, 0.0),
+            ChildOf(parent),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.25),
+            },
+        ))
+        .id();
+
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // Precondition: the parent drifted meaningfully under its default
+    // damping (observed ~0.87 m; naive integral says 0.975).
+    let parent_global = app.world().get::<GlobalTransform>(parent).unwrap();
+    assert!(
+        parent_global.translation().x > 0.8,
+        "precondition failed: parent barely moved (x = {})",
+        parent_global.translation().x
+    );
+
+    // The claim: the child holds its rotated-frame spawn world position
+    // (0, 10, -2) to the millimeter while the rotated frame translates.
+    let child_global = app.world().get::<GlobalTransform>(child).unwrap();
+    assert!(
+        child_global
+            .translation()
+            .distance(Vec3::new(0.0, 10.0, -2.0))
+            < 1e-3,
+        "child did not hold its rotated-frame world position: {}",
+        child_global.translation()
+    );
+}
+
+#[test]
+fn test_child_of_scaled_parent_holds_world_position() {
+    let mut app = physics_test_app();
+
+    app.world_mut().insert_resource(Gravity(Vec3::ZERO));
+
+    // A parent with ECS scale (2, 1, 1): spawn bakes the scale into the
+    // child's world offset (local (2, 0, 0) → world offset 4), and sync's
+    // parent frame must carry the same scale or the local conversion
+    // divides by the wrong frame and propagation diverges permanently.
+    let parent = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0).with_scale(Vec3::new(2.0, 1.0, 1.0)),
+            RigidBody::Static,
+            Collider::Box {
+                half_extents: Vec3::splat(0.25),
+            },
+        ))
+        .id();
+
+    let child = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(2.0, 0.0, 0.0),
+            ChildOf(parent),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.25),
+            },
+        ))
+        .id();
+
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // The claim: the child holds its scale-baked spawn world position
+    // (4, 10, 0), and its LOCAL spelling stays at 2.0 — parent_scale ×
+    // local == world offset, exactly what propagation recomputes.
+    let child_global = app.world().get::<GlobalTransform>(child).unwrap();
+    assert!(
+        child_global
+            .translation()
+            .distance(Vec3::new(4.0, 10.0, 0.0))
+            < 1e-3,
+        "scaled-parent frame diverged: {}",
+        child_global.translation()
+    );
+    let child_local_x = app.world().get::<Transform>(child).unwrap().translation.x;
+    assert!(
+        (child_local_x - 2.0).abs() < 1e-3,
+        "local spelling wrong for scaled parent: {child_local_x}"
     );
 }
