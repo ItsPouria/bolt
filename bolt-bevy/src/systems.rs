@@ -165,8 +165,8 @@ pub struct LastPhysicsSyncTick(pub(crate) Option<bevy::ecs::change_detection::Ti
 /// - **Root Entities**: Jolt world-space coordinates are written directly to [`Transform`].
 /// - **Child Entities** (entities with [`ChildOf`]): Jolt world coordinates are
 ///   transformed into the parent's local coordinate frame using the inverse of the
-///   parent's world frame, computed fresh inside the tick by
-///   [`compute_world_affine`]: a parent that is a physics body contributes its
+///   parent's world frame, computed fresh inside the tick by the private
+///   `compute_world_affine` helper: a parent that is a physics body contributes its
 ///   authoritative Jolt pose (already world-space), while a plain non-physics
 ///   parent is composed up its ancestor chain, stopping at the first physics
 ///   body. The [`GlobalTransform`] component is deliberately never read here —
