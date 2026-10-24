@@ -197,6 +197,11 @@ pub fn sync_transforms(
     // directly — fresher than any ECS read, and it touches no `Transform`,
     // so it cannot conflict with the `&mut Transform` above.
     parent_bodies: Query<&JoltBody, With<RigidBody>>,
+    // Physics bodies' ECS scale (Jolt never sees it; spawn bakes it into
+    // colliders). GlobalTransform is untouched by every other param, so
+    // this read cannot conflict — it exists to keep scaled parents' frames
+    // invertible, matching what propagation will compose with later.
+    body_globals: Query<&GlobalTransform, With<RigidBody>>,
     // Non-physics ancestors only. `Without<RigidBody>` keeps this query's
     // `&Transform` reads disjoint from the `&mut Transform` above by
     // construction — a fresh parent frame without a B0001 borrow conflict
@@ -239,7 +244,13 @@ pub fn sync_transforms(
             const ROT_EPSILON: f32 = 1e-5;
 
             let parent_affine = child_of.and_then(|c| {
-                compute_world_affine(c.parent(), &parent_bodies, &plain_hierarchy, &physics_world)
+                compute_world_affine(
+                    c.parent(),
+                    &parent_bodies,
+                    &body_globals,
+                    &plain_hierarchy,
+                    &physics_world,
+                )
             });
             if let Some(parent_affine) = parent_affine {
                 let world_affine = Affine3A::from_rotation_translation(world_rot, world_pos);
@@ -297,14 +308,22 @@ pub fn sync_transforms(
 fn compute_world_affine(
     entity: Entity,
     parent_bodies: &Query<&JoltBody, With<RigidBody>>,
+    body_globals: &Query<&GlobalTransform, With<RigidBody>>,
     plain_hierarchy: &Query<(Option<&ChildOf>, &Transform), Without<RigidBody>>,
     physics_world: &PhysicsWorld,
 ) -> Option<Affine3A> {
-    // Physics body: its Jolt pose *is* its world transform.
+    // Physics body: its Jolt pose *is* its world transform. Jolt never
+    // sees ECS scale (spawn bakes it into the collider), so the ancestor's
+    // GlobalTransform contributes the scale alone — reading that component
+    // is conflict-free (no other param touches GlobalTransform) and its
+    // one-tick staleness is at worst a transient for animating scale.
     if let Ok(body) = parent_bodies.get(entity) {
-        return physics_world
-            .get_transform(body.0)
-            .map(|(pos, rot)| Affine3A::from_rotation_translation(rot, pos));
+        let (pos, rot) = physics_world.get_transform(body.0)?;
+        let scale = body_globals
+            .get(entity)
+            .map(|global| global.scale())
+            .unwrap_or(Vec3::ONE);
+        return Some(Affine3A::from_scale_rotation_translation(scale, rot, pos));
     }
 
     // Plain entity: compose its local transform up the ancestor chain.
@@ -315,9 +334,14 @@ fn compute_world_affine(
     while let Some(entity) = ancestor {
         if let Ok(body) = parent_bodies.get(entity) {
             // A physics ancestor's Jolt pose is world-space: compose it in
-            // front and stop — nothing above it can change the result.
+            // front (with its ECS scale, as above) and stop — nothing above
+            // it can change the result.
             let (pos, rot) = physics_world.get_transform(body.0)?;
-            affine = Affine3A::from_rotation_translation(rot, pos) * affine;
+            let scale = body_globals
+                .get(entity)
+                .map(|global| global.scale())
+                .unwrap_or(Vec3::ONE);
+            affine = Affine3A::from_scale_rotation_translation(scale, rot, pos) * affine;
             break;
         }
 
@@ -535,5 +559,176 @@ mod tests {
         app.update();
 
         assert!(app.world().get::<JoltBody>(broken_entity).is_none());
+    }
+
+    // --- compute_world_affine: unit tests for every branch of the helper ---
+
+    /// Runs the private helper through a one-shot system so its exact query
+    /// parameters can be constructed, and returns the computed affine.
+    fn affine_of(app: &mut App, entity: Entity) -> Option<bevy::math::Affine3A> {
+        use bevy::ecs::system::RunSystemOnce;
+        app.world_mut()
+            .run_system_once(
+                move |parent_bodies: Query<&JoltBody, With<RigidBody>>,
+                      body_globals: Query<&GlobalTransform, With<RigidBody>>,
+                      plain_hierarchy: Query<
+                    (Option<&ChildOf>, &Transform),
+                    Without<RigidBody>,
+                >,
+                      pw: Res<PhysicsWorld>| {
+                    compute_world_affine(
+                        entity,
+                        &parent_bodies,
+                        &body_globals,
+                        &plain_hierarchy,
+                        &pw,
+                    )
+                },
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn test_compute_world_affine_physics_body_returns_jolt_pose() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(BoltPlugin::default());
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(5.0, 2.0, -3.0)
+                    .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+                RigidBody::Dynamic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+            ))
+            .id();
+
+        use bevy::ecs::system::RunSystemOnce;
+        let _ = app.world_mut().run_system_once(spawn_physics_bodies);
+        app.world_mut().flush();
+
+        // Diverge Jolt from the ECS: if the helper returned the entity's
+        // ECS Transform instead of querying Jolt, it could never notice.
+        // This pins the branch's actual contract — Jolt is the source of
+        // truth — rather than the spawn round-trip they both agree on.
+        let handle = app.world().get::<JoltBody>(entity).unwrap().0;
+        {
+            let mut pw = app.world_mut().get_resource_mut::<PhysicsWorld>().unwrap();
+            pw.set_position_and_rotation(handle, Vec3::new(9.0, 1.0, 4.0), Quat::IDENTITY);
+        }
+        let ecs_translation = app.world().get::<Transform>(entity).unwrap().translation;
+
+        let affine = affine_of(&mut app, entity).expect("physics body affine");
+
+        // Translation must match the JOLT pose, not the ECS one.
+        assert!(affine.translation.distance(Vec3::new(9.0, 1.0, 4.0).into()) < 1e-4);
+        assert_ne!(
+            affine.translation.to_vec3(),
+            ecs_translation,
+            "helper returned the ECS transform, not the Jolt pose"
+        );
+        // And the rotation follows Jolt too: the teleport set IDENTITY, so
+        // +X maps to +X (the spawn rotation is gone, and with it any
+        // chance of passing on spawn-time state).
+        let mapped = affine.transform_vector3(Vec3::X);
+        assert!(mapped.distance(Vec3::X) < 1e-4);
+    }
+
+    #[test]
+    fn test_compute_world_affine_composes_plain_chain_and_stops_at_physics_ancestor() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(BoltPlugin::default());
+
+        // Physics grandparent at (10, 0, 0), rotated +90° about Y.
+        let physics_grandparent = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(10.0, 0.0, 0.0)
+                    .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+                RigidBody::Dynamic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+            ))
+            .id();
+        // Plain parent: local offset (2, 0, 0) under the physics body.
+        let plain_parent = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(2.0, 0.0, 0.0),
+                ChildOf(physics_grandparent),
+            ))
+            .id();
+        // Plain child: local offset (0, 1, 0) under the plain parent.
+        let plain_child = app
+            .world_mut()
+            .spawn((Transform::from_xyz(0.0, 1.0, 0.0), ChildOf(plain_parent)))
+            .id();
+
+        use bevy::ecs::system::RunSystemOnce;
+        let _ = app.world_mut().run_system_once(spawn_physics_bodies);
+        app.world_mut().flush();
+
+        // Composition: grandparent's Jolt pose × (2, 0, 0) × (0, 1, 0).
+        // The +90° Y rotation maps the accumulated (2, 1, 0) offset to
+        // (0, 1, -2), so the world translation is (10, 1, -2). An inverted
+        // composition order produces a different answer, so this pins the
+        // ancestor-on-the-left rule. (Mutation-verified: swapping the
+        // multiply order in the walk fails here with (12, 1, 0).)
+        let affine = affine_of(&mut app, plain_child).expect("plain-chain affine");
+        assert!(
+            affine
+                .translation
+                .distance(Vec3::new(10.0, 1.0, -2.0).into())
+                < 1e-3,
+            "expected (10, 1, -2), got {}",
+            affine.translation
+        );
+    }
+
+    #[test]
+    fn test_compute_world_affine_root_plain_entity_returns_own_transform() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(BoltPlugin::default());
+
+        let entity = app
+            .world_mut()
+            .spawn(Transform::from_xyz(3.0, 4.0, 5.0).with_scale(Vec3::new(2.0, 1.0, 1.0)))
+            .id();
+
+        let affine = affine_of(&mut app, entity).expect("root plain affine");
+        assert!(affine.translation.distance(Vec3::new(3.0, 4.0, 5.0).into()) < 1e-5);
+        // Scale rides along: local +X is doubled.
+        let mapped = affine.transform_vector3(Vec3::X);
+        assert!(mapped.distance(Vec3::new(2.0, 0.0, 0.0)) < 1e-5);
+    }
+
+    #[test]
+    fn test_compute_world_affine_unspawned_rigidbody_yields_none() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(BoltPlugin::default());
+
+        // RigidBody present but spawn_physics_bodies never ran: no JoltBody,
+        // yet Without<RigidBody> keeps it out of the plain query too. The
+        // helper must report "not computable" — the child branch then falls
+        // back to world coordinates, same as a stale handle.
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Dynamic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+            ))
+            .id();
+
+        assert!(affine_of(&mut app, entity).is_none());
     }
 }
