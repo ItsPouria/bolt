@@ -1290,3 +1290,109 @@ fn test_child_of_scaled_parent_holds_world_position() {
         "local spelling wrong for scaled parent: {child_local_x}"
     );
 }
+
+/// Test-only marker: a kinematic platform moved by user "script" through
+/// Transform writes — the authoring path #4's remaining item targets.
+#[derive(Component)]
+struct SlidingPlatform;
+
+fn slide_platform(
+    time: Res<Time<Fixed>>,
+    mut platforms: Query<&mut Transform, With<SlidingPlatform>>,
+) {
+    for mut transform in &mut platforms {
+        transform.translation.x += 1.5 * time.delta_secs();
+    }
+}
+
+#[test]
+fn test_transform_driven_kinematic_platform_carries_dynamic_rider() {
+    let mut app = physics_test_app();
+
+    // Gravity stays ON: it presses the crate into the platform, which is
+    // what makes friction — the only thing that can carry it — act.
+    //
+    // The scene is deliberately HORIZONTAL. A rising platform can fake a
+    // pass even with teleport semantics: each tick's teleport pushes the
+    // platform into the crate and Jolt's depenetration shoves it upward —
+    // carry by artifact. Sideways motion carries a rider ONLY through
+    // friction, and friction only acts on velocity: a sideways teleport
+    // exerts no horizontal force at all, so pre-fix the crate has no
+    // mechanism to move. The crate is NOT parented — contact is the story.
+    let platform = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            RigidBody::Kinematic,
+            Collider::Box {
+                half_extents: Vec3::new(1.5, 0.1, 1.5),
+            },
+            SlidingPlatform,
+        ))
+        .id();
+    let crate_entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 0.6, 0.0), // bottom face on the platform's top (0.1)
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+        ))
+        .id();
+
+    // No warm-up: the claims are differential (crate vs platform), so a
+    // one-tick initial shift from the spawn-frame subtlety is invisible.
+    app.add_systems(
+        FixedUpdate,
+        slide_platform.before(bolt_bevy::systems::PhysicsSet::Spawn),
+    );
+
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // Precondition: the platform actually slid. 1.5 m/s for ~57.6/64 ticks
+    // ≈ 1.35 m; gate at 1.0.
+    let platform_x = app
+        .world()
+        .get::<Transform>(platform)
+        .unwrap()
+        .translation
+        .x;
+    assert!(
+        platform_x > 1.0,
+        "precondition failed: platform barely moved (x = {platform_x})"
+    );
+
+    // The claim, with friction arithmetic derived first (Jolt default
+    // μ = 0.2): crate accel = μg ≈ 1.96 m/s², reaches platform speed at
+    // t ≈ 0.77 s after ≈ 0.57 m, then rides: ≈ 0.93 m after 1 s. The crate
+    // legitimately lags the platform by ~0.4 m — friction-limited, correct
+    // physics — so the gate sits between the two worlds: far above the
+    // pre-fix crate at ~0 (no velocity, no friction, nothing to move it),
+    // safely below 0.93.
+    let crate_x = app
+        .world()
+        .get::<GlobalTransform>(crate_entity)
+        .unwrap()
+        .translation()
+        .x;
+    assert!(
+        crate_x > 0.5,
+        "crate was not carried: x = {crate_x} while platform reached {platform_x} \
+         (pre-fix expectation ≈ 0.0 — the Coyote test)"
+    );
+
+    // Invariant: friction can accelerate but never let the crate lead.
+    assert!(
+        crate_x < platform_x,
+        "crate leads the platform ({crate_x} > {platform_x})?"
+    );
+
+    // Second signal: sync writes Jolt's velocity back into the component —
+    // a carried crate is moving with the platform, not standing still.
+    let crate_velocity_x = app.world().get::<LinearVelocity>(crate_entity).unwrap().x;
+    assert!(
+        crate_velocity_x > 1.0,
+        "crate not moving with the platform: velocity.x = {crate_velocity_x}"
+    );
+}
