@@ -807,6 +807,67 @@ impl PhysicsWorld {
         }
     }
 
+    /// Moves a kinematic body toward a target pose over `delta_time` by
+    /// setting its velocity internally (displacement / `delta_time`). The
+    /// velocity **persists until re-issued** — issue this every fixed tick,
+    /// or the body keeps its last velocity after reaching its target. The
+    /// position lands on the next [`step`](Self::step).
+    ///
+    /// Ignored (no FFI call) for: stale handles, non-finite target fields,
+    /// non-positive or non-finite `delta_time` (Jolt divides by it), and any
+    /// body that is not kinematic — static bodies hold a null
+    /// motion-properties pointer, and Jolt's `MoveKinematic` does not guard
+    /// this (a release-mode null dereference).
+    pub fn move_kinematic(
+        &mut self,
+        handle: BodyHandle,
+        target_position: Vec3,
+        target_rotation: Quat,
+        delta_time: f32,
+    ) {
+        if !self.is_valid(handle)
+            || !target_position.is_finite()
+            || !target_rotation.is_finite()
+            || !target_rotation.is_normalized()
+            || !delta_time.is_finite()
+            || delta_time <= 0.0
+        {
+            return;
+        }
+
+        // SAFETY: body_id is valid and registered; the motion-type check
+        // below runs before the move, so the non-kinematic null-deref trap
+        // (statics hold no motion properties) is unreachable.
+        unsafe {
+            let body_interface = self.body_interface();
+            if joltc_sys::JPC_BodyInterface_GetMotionType(body_interface, handle.0.raw())
+                != joltc_sys::JPC_MOTION_TYPE_KINEMATIC
+            {
+                return;
+            }
+
+            let pos = joltc_sys::JPC_Vec3 {
+                x: target_position.x,
+                y: target_position.y,
+                z: target_position.z,
+                _w: 0.0,
+            };
+            let rot = joltc_sys::JPC_Quat {
+                x: target_rotation.x,
+                y: target_rotation.y,
+                z: target_rotation.z,
+                w: target_rotation.w,
+            };
+            joltc_sys::JPC_BodyInterface_MoveKinematic(
+                body_interface,
+                handle.0.raw(),
+                pos,
+                rot,
+                delta_time,
+            );
+        }
+    }
+
     /// Destroys the body with the given ID and releases its Jolt resources.
     ///
     /// Returns whether a registered body was destroyed; unknown or
@@ -1405,6 +1466,147 @@ mod tests {
         // Dropping with live bodies of every motion type must not trip
         // Jolt's teardown assertions.
         drop(physics_world);
+    }
+
+    #[test]
+    fn test_move_kinematic_lands_on_next_step() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let handle = physics_world
+            .spawn_body(box_spawn(BodyType::Kinematic, 0))
+            .expect("Failed to spawn kinematic box");
+
+        // The position lands on the NEXT step: issuing the move must not
+        // teleport, and one step of exactly delta_time arrives at the target.
+        physics_world.move_kinematic(
+            handle,
+            Vec3::new(0.0, 5.0, 0.0),
+            Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            1.0 / 60.0,
+        );
+
+        let (before_pos, _) = physics_world.get_transform(handle).unwrap();
+        assert_eq!(before_pos, Vec3::ZERO, "MoveKinematic must not teleport");
+
+        physics_world.step(1.0 / 60.0, 1);
+
+        let (after_pos, after_rot) = physics_world.get_transform(handle).unwrap();
+        assert!(
+            after_pos.distance(Vec3::new(0.0, 5.0, 0.0)) < 1e-3,
+            "kinematic body should land at the target after one step, got {after_pos}"
+        );
+        let target_rot = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        assert!(
+            (1.0 - after_rot.dot(target_rot).abs()) < 1e-3,
+            "kinematic body should land at the target rotation"
+        );
+    }
+
+    #[test]
+    fn test_move_kinematic_refuses_non_kinematic_and_invalid_inputs() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+
+        // Static body: the null-motion-properties trap. Must be refused
+        // without a crash (release-mode null dereference in Jolt otherwise)
+        // and without moving.
+        let static_handle = physics_world
+            .spawn_body(box_spawn(BodyType::Static, 0))
+            .expect("Failed to spawn static box");
+        physics_world.move_kinematic(
+            static_handle,
+            Vec3::new(0.0, 5.0, 0.0),
+            Quat::IDENTITY,
+            1.0 / 60.0,
+        );
+        physics_world.step(1.0 / 60.0, 1);
+        let (pos, _) = physics_world.get_transform(static_handle).unwrap();
+        assert_eq!(pos, Vec3::ZERO, "static body must not MoveKinematic-move");
+
+        // Dynamic body: likewise refused — MoveKinematic is kinematic-only.
+        let dynamic_handle = physics_world
+            .spawn_body(BodySpawn {
+                position: Vec3::new(10.0, 0.0, 0.0),
+                ..box_spawn(BodyType::Dynamic, 1)
+            })
+            .expect("Failed to spawn dynamic box");
+        physics_world.move_kinematic(
+            dynamic_handle,
+            Vec3::new(10.0, 5.0, 0.0),
+            Quat::IDENTITY,
+            1.0 / 60.0,
+        );
+        physics_world.step(1.0 / 60.0, 1);
+        let (pos, _) = physics_world.get_transform(dynamic_handle).unwrap();
+        assert!(
+            pos.y < 0.5,
+            "dynamic body must not be MoveKinematic-driven (y = {}); gravity owns it",
+            pos.y
+        );
+
+        // Invalid delta_time and non-finite targets: refused, nothing moves.
+        let kinematic = physics_world
+            .spawn_body(BodySpawn {
+                position: Vec3::new(20.0, 0.0, 0.0),
+                ..box_spawn(BodyType::Kinematic, 2)
+            })
+            .expect("Failed to spawn kinematic box");
+        for delta_time in [0.0, -1.0 / 60.0, f32::NAN] {
+            physics_world.move_kinematic(
+                kinematic,
+                Vec3::new(20.0, 9.0, 0.0),
+                Quat::IDENTITY,
+                delta_time,
+            );
+        }
+        physics_world.move_kinematic(
+            kinematic,
+            Vec3::new(f32::NAN, 0.0, 0.0),
+            Quat::IDENTITY,
+            1.0 / 60.0,
+        );
+        physics_world.move_kinematic(
+            kinematic,
+            Vec3::new(20.0, 9.0, 0.0),
+            Quat::from_xyzw(f32::NAN, 0.0, 0.0, 1.0),
+            1.0 / 60.0,
+        );
+        physics_world.step(1.0 / 60.0, 1);
+        let (pos, _) = physics_world.get_transform(kinematic).unwrap();
+        assert_eq!(
+            pos,
+            Vec3::new(20.0, 0.0, 0.0),
+            "all refused calls must leave the body untouched"
+        );
+
+        // Stale handle: refused without panic.
+        physics_world.destroy_body(kinematic);
+        physics_world.move_kinematic(kinematic, Vec3::ZERO, Quat::IDENTITY, 1.0 / 60.0);
+    }
+
+    #[test]
+    fn test_move_kinematic_velocity_persists_until_reissued() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        let handle = physics_world
+            .spawn_body(box_spawn(BodyType::Kinematic, 0))
+            .expect("Failed to spawn kinematic box");
+
+        // MoveKinematic sets velocity = displacement/delta_time and that
+        // velocity PERSISTS until re-issued. After landing at the target,
+        // a second step without re-issuing keeps moving at the same rate —
+        // this is precisely why the ECS layer must issue it every fixed
+        // tick (target == current → velocity → 0 → platforms halt).
+        physics_world.move_kinematic(handle, Vec3::new(0.0, 5.0, 0.0), Quat::IDENTITY, 1.0 / 60.0);
+        physics_world.step(1.0 / 60.0, 1);
+        let (landed, _) = physics_world.get_transform(handle).unwrap();
+        assert!((landed.y - 5.0).abs() < 1e-3);
+
+        physics_world.step(1.0 / 60.0, 1);
+        let (kept_going, _) = physics_world.get_transform(handle).unwrap();
+        assert!(
+            (kept_going.y - 10.0).abs() < 1e-2,
+            "velocity must persist until re-issued (y = {}); the per-tick ECS \
+             issuance exists because of this",
+            kept_going.y
+        );
     }
 
     #[test]
