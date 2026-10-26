@@ -59,6 +59,22 @@ All notable changes to this project will be documented in this file.
 - `PhysicsWorld::get_linear_and_angular_velocity(handle)` in bolt-core:
   both velocities behind a single lock acquisition instead of two FFI
   round-trips; bolt-bevy's transform-sync loop uses it.
+- `PhysicsWorld::move_kinematic` in bolt-core (#4, Fix B core layer):
+  displacement-driven kinematic motion — a target pose plus a time
+  interval in, a velocity Jolt computes internally (displacement /
+  delta_time) and that **persists until re-issued**; the position lands on
+  the next `step`. Guards, silent no-ops per house setter style: stale
+  handles, non-finite or unnormalized targets, non-positive or non-finite
+  `delta_time` (Jolt divides by it), and non-kinematic bodies — verified
+  against the vendored Jolt source that statics hold a null
+  motion-properties pointer and `MoveKinematic` carries no guard, so the
+  motion type is checked before the FFI call (a release-mode null
+  dereference otherwise). Completes the movement family: teleport
+  (`set_position_and_rotation`), velocity (`set_*_velocity`), and
+  displacement (`move_kinematic`). Pinned by three white-box tests —
+  landing-on-next-step, the refusal sweep, and velocity persistence, the
+  semantics that will oblige the planned ECS wiring (#4) to re-issue
+  every fixed tick. Silent-refusal observability is tracked in #12.
 - bolt-bevy now re-exports `BodyHandle` and `RayHit` (crate root and prelude):
   types returned by its public API are nameable without a direct bolt-core
   dependency.
