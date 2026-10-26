@@ -64,6 +64,9 @@ impl Plugin for BoltPlugin {
                 crate::systems::apply_user_transforms
                     .in_set(crate::systems::PhysicsSet::ApplyVelocities)
                     .after(apply_velocities),
+                crate::systems::move_transform_driven_kinematics
+                    .in_set(crate::systems::PhysicsSet::ApplyVelocities)
+                    .after(crate::systems::apply_user_transforms),
                 apply_gravity.in_set(crate::systems::PhysicsSet::ApplyGravity),
                 step_physics.in_set(crate::systems::PhysicsSet::Step),
                 sync_transforms.in_set(crate::systems::PhysicsSet::SyncTransforms),

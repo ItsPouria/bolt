@@ -1,3 +1,4 @@
+pub use crate::components::TransformDriven;
 pub use crate::components::*;
 pub use crate::config::PhysicsConfig;
 pub use crate::gravity::Gravity;

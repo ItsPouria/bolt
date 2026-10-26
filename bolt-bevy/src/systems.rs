@@ -3,6 +3,7 @@ use bevy::prelude::*;
 
 use crate::components::{
     AngularDamping, AngularVelocity, JoltBody, LinearDamping, LinearVelocity, StaticMarker,
+    TransformDriven,
 };
 use crate::config::PhysicsConfig;
 use crate::prelude::{Collider, RigidBody};
@@ -393,19 +394,55 @@ pub fn apply_velocities(
     }
 }
 
-/// Scans the ECS for any physics bodies whose [`Transform`] was manually modified
-/// by the user this frame, and teleports the corresponding Jolt body.
+/// Scans the ECS for any physics bodies whose [`Transform`] was manually
+/// modified by the user this frame. Dynamic and static bodies are teleported
+/// to the new pose. Kinematic bodies instead claim [`TransformDriven`]
+/// ownership: the per-tick MoveKinematic path drives them toward the
+/// ECS-derived pose with real velocity, so riders get carried — at the cost
+/// of the first edit taking effect one tick later (marker, then the next
+/// tick's move, then the position landing on the following step).
 #[allow(clippy::type_complexity)]
 pub fn apply_user_transforms(
+    mut commands: Commands,
     mut physics_world: ResMut<PhysicsWorld>,
-    query: Query<(Entity, &JoltBody, Ref<Transform>, Option<&ChildOf>), Changed<Transform>>,
+    query: Query<
+        (
+            Entity,
+            &RigidBody,
+            &JoltBody,
+            Ref<JoltBody>,
+            Ref<Transform>,
+            Option<&ChildOf>,
+        ),
+        Changed<Transform>,
+    >,
     transform_helper: TransformHelper,
     last_sync_tick: Option<Res<LastPhysicsSyncTick>>,
 ) {
     let sync_tick = last_sync_tick.and_then(|t| t.0);
-    for (entity, body, transform, child_of) in query.iter() {
+    for (entity, rigidbody, body, jolt_body_ref, transform, child_of) in query.iter() {
         // Ignore Transform changes that were written by `sync_transforms`
         if sync_tick == Some(transform.last_changed()) {
+            continue;
+        }
+
+        // A Transform write that predates (or shares the tick with) the
+        // JoltBody's creation is spawn placement, not user motion — the
+        // body was just created at that pose. Claiming ownership for it
+        // would mark every kinematic at birth, and the per-tick move
+        // (target == current) would cancel velocity-path motion every tick.
+        // Tick precedence (not `is_added`, whose "since this system last
+        // ran" semantics treat everything as new on a system's first run)
+        // works both in the pipeline and under run_system_once tests.
+        if transform.last_changed().get() <= jolt_body_ref.last_changed().get() {
+            continue;
+        }
+
+        if *rigidbody == RigidBody::Kinematic {
+            // Don't teleport: hand ownership to the per-tick MoveKinematic path.
+            // Note the honest latency: the first edit takes effect one tick later
+            // (marker -> next tick's move_kinematic -> lands the step after).
+            commands.entity(entity).insert(TransformDriven);
             continue;
         }
 
@@ -426,6 +463,56 @@ pub fn apply_user_transforms(
         {
             physics_world.set_position_and_rotation(body.0, pos, rot);
         }
+    }
+}
+
+/// Drives [`TransformDriven`] kinematic bodies toward their ECS-derived
+/// world pose every fixed tick via [`PhysicsWorld::move_kinematic`], giving
+/// them real velocity (displacement / delta_time) so friction can carry
+/// riders and contacts respond to genuine motion.
+///
+/// Issued unconditionally every tick — not on `Changed<Transform>` —
+/// because the velocity `move_kinematic` sets **persists until re-issued**:
+/// once the user stops editing, target ≡ current pose and the computed
+/// velocity decays to zero, halting the body gracefully. Issue-on-change
+/// would leave platforms drifting forever after their script stops (pinned
+/// by `test_move_kinematic_velocity_persists_until_reissued` in bolt-core).
+///
+/// The target pose is ECS-derived (the user's authority): root bodies take
+/// their own [`Transform`]; parented bodies compose the parent's world
+/// frame — computed on the *parent*, never the entity, whose [`JoltBody`]
+/// would make `compute_world_affine` return its Jolt pose and silently
+/// discard the user's edit. Scale is dropped in the decomposition:
+/// `move_kinematic` takes only position and rotation.
+#[allow(clippy::type_complexity)]
+pub fn move_transform_driven_kinematics(
+    mut physics_world: ResMut<PhysicsWorld>,
+    query: Query<(&JoltBody, &Transform, Option<&ChildOf>), With<TransformDriven>>,
+    parent_bodies: Query<&JoltBody, With<RigidBody>>,
+    body_globals: Query<&GlobalTransform, With<RigidBody>>,
+    plain_hierarchy: Query<(Option<&ChildOf>, &Transform), Without<RigidBody>>,
+    time: Res<Time<Fixed>>,
+) {
+    let delta_time = time.delta_secs();
+    for (body, transform, child_of) in query.iter() {
+        let target_affine = match child_of {
+            Some(child_of) => compute_world_affine(
+                child_of.parent(),
+                &parent_bodies,
+                &body_globals,
+                &plain_hierarchy,
+                &physics_world,
+            )
+            .map(|parent_affine| parent_affine * transform.compute_affine()),
+            None => Some(transform.compute_affine()),
+        };
+
+        let Some(target_affine) = target_affine else {
+            continue;
+        };
+        // Scale is deliberately dropped: MoveKinematic takes only the pose.
+        let (_, rotation, position) = target_affine.to_scale_rotation_translation();
+        physics_world.move_kinematic(body.0, position, rotation, delta_time);
     }
 }
 
@@ -484,6 +571,11 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         let _ = app.world_mut().run_system_once(spawn_physics_bodies);
         app.world_mut().flush();
+        // Advance the change tick between spawn and the user edit, as the
+        // real schedule does between system runs — otherwise both writes
+        // share a tick and the spawn-placement discriminator (correctly)
+        // treats the edit as part of spawning.
+        let _ = app.world_mut().run_system_once(sync_transforms);
 
         // Mutate the transform
         {
@@ -505,6 +597,9 @@ mod tests {
 
     #[test]
     fn test_apply_user_transforms_small_nudge_after_sync() {
+        // Dynamic body: the teleport path, whose eat-window invariant this
+        // test pins. Kinematic Transform edits no longer teleport — they
+        // claim TransformDriven ownership (see the test below).
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(BoltPlugin::default());
@@ -513,7 +608,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Transform::from_xyz(0.0, 10.0, 0.0),
-                RigidBody::Kinematic,
+                RigidBody::Dynamic,
                 Collider::Box {
                     half_extents: Vec3::splat(1.0),
                 },
@@ -559,6 +654,56 @@ mod tests {
         app.update();
 
         assert!(app.world().get::<JoltBody>(broken_entity).is_none());
+    }
+
+    #[test]
+    fn test_kinematic_transform_edit_claims_ownership_not_teleport() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(BoltPlugin::default());
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Kinematic,
+                Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
+            ))
+            .id();
+
+        use bevy::ecs::system::RunSystemOnce;
+        let _ = app.world_mut().run_system_once(spawn_physics_bodies);
+        app.world_mut().flush();
+        // Advance the change tick between spawn and the edit (the real
+        // schedule does this between system runs); see the teleport test.
+        let _ = app.world_mut().run_system_once(sync_transforms);
+
+        // A genuine user edit: nudge, then run the claiming system.
+        {
+            let mut transform = app.world_mut().get_mut::<Transform>(entity).unwrap();
+            transform.translation.x += 0.005;
+        }
+        let _ = app.world_mut().run_system_once(apply_user_transforms);
+        app.world_mut().flush();
+
+        // New contract, part 1: the marker is claimed…
+        assert!(
+            app.world()
+                .get::<crate::components::TransformDriven>(entity)
+                .is_some(),
+            "kinematic Transform edit must claim TransformDriven ownership"
+        );
+        // …and part 2: no teleport — Jolt is unmoved until the per-tick
+        // system drives it (one-tick honest latency, by design).
+        let pw = app.world().get_resource::<PhysicsWorld>().unwrap();
+        let handle = app.world().get::<JoltBody>(entity).unwrap().0;
+        let (pos, _) = pw.get_transform(handle).unwrap();
+        assert!(
+            (pos.x - 0.0).abs() < 1e-6,
+            "kinematic edit must not teleport; Jolt still at spawn, got {pos}"
+        );
     }
 
     // --- compute_world_affine: unit tests for every branch of the helper ---

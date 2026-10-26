@@ -190,3 +190,10 @@ pub struct StaticMarker;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]
 #[reflect(Component)]
 pub struct ContinuousCollision;
+
+/// Marks a kinematic body as driven by user `Transform` edits: the
+/// per-tick kinematic system issues `move_kinematic` toward the
+/// ECS-derived pose. Removed when the user writes a velocity component
+/// (the velocity path takes over) or the body is respawned.
+#[derive(Component)]
+pub struct TransformDriven;

@@ -153,6 +153,27 @@ impl PhysicsWorld {
         self.0.set_position_and_rotation(handle, position, rotation);
     }
 
+    /// Moves a kinematic body toward a target pose over `delta_time` by
+    /// setting its velocity internally (delegates to bolt-core's
+    /// [`PhysicsWorld::move_kinematic`](bolt_core::world::PhysicsWorld::move_kinematic)).
+    ///
+    /// The velocity persists until re-issued, so the per-tick
+    /// [`move_transform_driven_kinematics`](crate::systems::move_transform_driven_kinematics)
+    /// system calls this every fixed tick: once the user stops editing the
+    /// `Transform`, target ≡ current and the velocity decays to zero.
+    /// Ignored for stale handles, non-finite/unnormalized targets,
+    /// non-positive `delta_time`, and non-kinematic bodies.
+    pub fn move_kinematic(
+        &mut self,
+        handle: BodyHandle,
+        target_position: Vec3,
+        target_rotation: Quat,
+        delta_time: f32,
+    ) {
+        self.0
+            .move_kinematic(handle, target_position, target_rotation, delta_time);
+    }
+
     /// Reads the body's transform; see [`CorePhysicsWorld::get_transform`].
     pub fn get_transform(&self, handle: BodyHandle) -> Option<(Vec3, Quat)> {
         self.0.get_transform(handle)
