@@ -74,12 +74,43 @@ All notable changes to this project will be documented in this file.
   displacement (`move_kinematic`). Pinned by three white-box tests —
   landing-on-next-step, the refusal sweep, and velocity persistence, the
   semantics that will oblige the planned ECS wiring (#4) to re-issue
-  every fixed tick. Silent-refusal observability is tracked in #12.
+  every fixed tick. Logging of the
+  silent refusals is deliberately deferred to the observability-policy
+  issue (#12); the ECS layer (Transform-driven kinematics) follows as
+  the #4 Fix B remainder.
+- Transform-driven kinematic bodies in bolt-bevy (#4, Fix B ECS layer):
+  a kinematic body whose `Transform` is edited by user code now moves
+  with real velocity instead of teleporting. The first genuine edit
+  claims ownership via a new `TransformDriven` marker component; the new
+  `move_transform_driven_kinematics` system then issues
+  `PhysicsWorld::move_kinematic` toward the ECS-derived world pose every
+  fixed tick — unconditional by design, because the velocity
+  MoveKinematic sets persists until re-issued: when the script stops
+  editing, target ≡ current and the velocity decays to zero, halting the
+  body gracefully. Parented targets compose the parent's world frame via
+  the #4 Fix A machinery (on the parent — the entity's own Jolt pose
+  would discard the edit); scale is dropped, as `move_kinematic` takes
+  only a pose. bolt-bevy's `PhysicsWorld` wrapper gains the delegating
+  `move_kinematic` method. Riders are carried by friction: the
+  acceptance test's crate tracks a 1.5 m/s sliding platform at exactly
+  the predicted μ-limited arithmetic (0.93 m × tick quantization =
+  0.837 m measured).
 - bolt-bevy now re-exports `BodyHandle` and `RayHit` (crate root and prelude):
   types returned by its public API are nameable without a direct bolt-core
   dependency.
 
 ### Changed
+- Kinematic `Transform` edits no longer teleport the Jolt body (#4, Fix
+  B): they claim `TransformDriven` ownership and move with real velocity
+  instead (see Added). Two consequences: the first edit takes effect one
+  tick later (marker, next tick's move, position on the following step) —
+  the price of velocity-honest motion — and the spawn-time bundle insert
+  is placement, never an edit: a Transform write that predates the body's
+  creation tick does not claim ownership (otherwise every kinematic would
+  be marked at birth and the per-tick move would cancel velocity-path
+  motion every tick). The 5 mm nudge test now pins the eat-window
+  invariant on a dynamic body, and a new unit test pins the ownership
+  claim itself (marker inserted, Jolt unmoved until the per-tick system).
 - bolt-bevy's wrapper `spawn_body` collapsed its grown 10-argument signature
   into a `BodySpawnRequest<'a>` parameter object (#8): a borrowed struct with
   named fields (entity, collider & scale, pose, velocities, damping, CCD),
