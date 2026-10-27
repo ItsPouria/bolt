@@ -141,9 +141,13 @@ pub fn spawn_physics_bodies(
                     "Failed to spawn physics body for entity {:?}; removing RigidBody and Collider",
                     entity
                 );
-                commands
-                    .entity(entity)
-                    .remove::<(RigidBody, Collider, JoltBody, StaticMarker)>();
+                commands.entity(entity).remove::<(
+                    RigidBody,
+                    Collider,
+                    JoltBody,
+                    StaticMarker,
+                    TransformDriven,
+                )>();
             }
         }
     }
@@ -193,6 +197,7 @@ pub fn sync_transforms(
             &mut Transform,
             Option<&ChildOf>,
             &JoltBody,
+            &RigidBody,
             Option<&mut LinearVelocity>,
             Option<&mut AngularVelocity>,
             Option<&TransformDriven>,
@@ -221,7 +226,7 @@ pub fn sync_transforms(
         sync_tick.0 = Some(system_change_tick.this_run());
     }
 
-    for (mut transform, child_of, body, mut lin_vel, mut ang_vel, transform_driven) in
+    for (mut transform, child_of, body, rigidbody, mut lin_vel, mut ang_vel, transform_driven) in
         query.iter_mut()
     {
         let active = physics_world.is_active(body.0);
@@ -254,8 +259,18 @@ pub fn sync_transforms(
         // parent's motion out of the target — the drive would chase its
         // own tail and hold the status-quo world pose instead of tracking
         // the parent frame. Velocities still mirror; the drive lands the
-        // body at parent × local, so propagation renders the truth anyway.
-        if transform_driven.is_none()
+        // body at parent × local within a sub-step (the target is computed
+        // from the parent's pre-step pose, so a fast parent shows one
+        // sub-step of lag — v·dt), and propagation renders from the same
+        // frame, so the ECS view is exact.
+        // Kinematic-gated: a hand-inserted marker on a dynamic body must
+        // not freeze its ECS mirror (the drive refuses non-kinematics, so
+        // nothing would ever write the local) — the invariant "marker
+        // present ⇒ the drive is actually driving" holds only for
+        // kinematics, so only they get the mirror skip.
+        let transform_driven_kinematic =
+            transform_driven.is_some() && *rigidbody == RigidBody::Kinematic;
+        if !transform_driven_kinematic
             && let Some((world_pos, world_rot)) = physics_world.get_transform(body.0)
         {
             const POS_EPSILON_SQ: f32 = 1e-6;
@@ -472,12 +487,18 @@ pub fn apply_user_transforms(
         // works both in the pipeline and under run_system_once tests.
         //
         // Two known edges, both accepted: the raw u32 compare is not
-        // wraparound-aware, so after ~2^31 change-tick increments Bevy's
-        // tick clamping can misread an ancient spawn as newer than a fresh
-        // edit (false-negative only: the edit is skipped, never a false
-        // claim); and a Commands-queued Transform write landing on the
-        // JoltBody's own flush tick is treated as placement forever —
-        // "placement wins" is the safe reading of an ambiguous case.
+        // wraparound-aware, and the u32 straddle across a change-tick wrap
+        // can misfire in BOTH directions — an ancient spawn read as newer
+        // than a fresh edit (skipped: a lost claim), or a placement write
+        // at u32::MAX−k read as older than a post-wrap flush (a false
+        // claim at birth). The window is ~1–2 change ticks per 2^32
+        // increments; long-running servers that spawn kinematics
+        // continuously will eventually hit one. A wrap-aware compare
+        // (half-range wrapping_sub, like Tick::is_newer) would close it if
+        // this ever matters in practice. And a Commands-queued Transform
+        // write landing on the JoltBody's own flush tick is treated as
+        // placement forever — "placement wins" is the safe reading of an
+        // ambiguous case.
         if transform.last_changed().get() <= jolt_body_ref.last_changed().get() {
             continue;
         }
@@ -549,6 +570,19 @@ pub fn move_transform_driven_kinematics(
 ) {
     let delta_time = time.delta_secs();
     for (body, transform, child_of) in query.iter() {
+        // Refusal semantics: a non-finite target is a script bug, and
+        // bolting it through move_kinematic would leave the body holding
+        // its LAST drive velocity forever (bolt-core's persistence
+        // contract) — a runaway. Halt instead: zero both velocities and
+        // skip this tick's move. The ECS local stays whatever the script
+        // wrote (Bevy's standard NaN behavior), but the simulation stops.
+        if !transform.translation.is_finite() || !transform.rotation.is_finite() {
+            warn!("TransformDriven target is non-finite; halting body to prevent a runaway");
+            physics_world.set_linear_velocity(body.0, Vec3::ZERO);
+            physics_world.set_angular_velocity(body.0, Vec3::ZERO);
+            continue;
+        }
+
         let target_affine = match child_of {
             Some(child_of) => compute_world_affine(
                 child_of.parent(),
@@ -583,14 +617,14 @@ pub fn step_physics(
 /// Observer that removes the JoltBody when RigidBody is removed.
 pub fn remove_jolt_body_on_rigidbody_removal(event: On<Remove<RigidBody>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(event.entity) {
-        entity.try_remove::<(JoltBody, StaticMarker)>();
+        entity.try_remove::<(JoltBody, StaticMarker, TransformDriven)>();
     }
 }
 
 /// Observer that removes the JoltBody when Collider is removed.
 pub fn remove_jolt_body_on_collider_removal(event: On<Remove<Collider>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(event.entity) {
-        entity.try_remove::<(JoltBody, StaticMarker)>();
+        entity.try_remove::<(JoltBody, StaticMarker, TransformDriven)>();
     }
 }
 
@@ -957,6 +991,77 @@ mod tests {
             velocity.x.abs() < 0.1,
             "velocity should decay after arrival, got {}",
             velocity.x
+        );
+    }
+
+    #[test]
+    fn test_non_finite_target_halts_instead_of_runaway() {
+        // The S2 regression pin: without the halt, a script writing a NaN
+        // local leaves the body holding its last drive velocity forever
+        // (persistence contract) — a runaway — while its ECS pose froze.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TransformPlugin);
+        app.add_plugins(BoltPlugin::default());
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 64.0),
+            ));
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Kinematic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+            ))
+            .id();
+
+        // Warm up (first update may run zero fixed ticks), then drive to
+        // establish a real velocity.
+        for _ in 0..2 {
+            app.update();
+        }
+        {
+            let mut transform = app.world_mut().get_mut::<Transform>(entity).unwrap();
+            transform.translation.x = 3.0;
+        }
+        app.update();
+        let (handle, driven_pos) = {
+            let pw = app.world().get_resource::<PhysicsWorld>().unwrap();
+            let handle = app.world().get::<JoltBody>(entity).unwrap().0;
+            let (pos, _) = pw.get_transform(handle).unwrap();
+            (handle, pos)
+        };
+        assert!(driven_pos.x > 2.9, "precondition: body was driven");
+
+        // The script bug: a non-finite target. The body must halt, not
+        // keep its drive velocity.
+        {
+            let mut transform = app.world_mut().get_mut::<Transform>(entity).unwrap();
+            transform.translation.x = f32::NAN;
+        }
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let velocity = app.world().get::<LinearVelocity>(entity).unwrap();
+        assert!(
+            velocity.length() < 0.1,
+            "non-finite target must halt the body, velocity = {:?}",
+            velocity.0
+        );
+        let (pos_after, _) = app
+            .world()
+            .get_resource::<PhysicsWorld>()
+            .unwrap()
+            .get_transform(handle)
+            .unwrap();
+        assert!(
+            (pos_after.x - driven_pos.x).abs() < 0.05,
+            "halted body must not drift: {pos_after} vs {driven_pos}"
         );
     }
 
