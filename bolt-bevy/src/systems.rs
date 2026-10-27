@@ -901,9 +901,14 @@ mod tests {
             ))
             .id();
 
-        // Spawn tick: the birth-tick discriminator must keep the body
-        // unmarked (placement is not an edit).
-        app.update();
+        // Warm-up: with a manual clock the FIRST update can run zero fixed
+        // ticks, so pump until the body actually exists — otherwise the
+        // edit below lands on the spawn tick and is absorbed as placement
+        // (a previous version of this test passed vacuously exactly that
+        // way: pos arrived via spawn, the marker was never claimed).
+        for _ in 0..2 {
+            app.update();
+        }
         assert!(
             app.world()
                 .get::<crate::components::TransformDriven>(entity)
@@ -920,8 +925,10 @@ mod tests {
         // ONE update must be enough: the marker flushes at the auto sync
         // point on apply_user_transforms' ordering edge, the move system
         // runs later in the same tick, and that tick's step lands the
-        // pose. This pins the same-tick landing the docs describe — if it
-        // ever regresses to a multi-tick chain, this fails.
+        // pose (velocity = displacement / delta_time, so arrival is exact
+        // and immediate). This pins the same-tick landing the docs
+        // describe — if it ever regresses to a multi-tick chain, this
+        // fails.
         app.update();
 
         let pw = app.world().get_resource::<PhysicsWorld>().unwrap();
@@ -932,8 +939,19 @@ mod tests {
             "marked kinematic should have arrived at the target, got x = {}",
             pos.x
         );
-        // And the drive decays: once arrived, the per-tick re-issue
-        // (target == current) drives the velocity back toward zero.
+        // The claim itself is pinned too: vacuous arrival via spawn
+        // placement is no longer possible after the warm-up.
+        assert!(
+            app.world()
+                .get::<crate::components::TransformDriven>(entity)
+                .is_some(),
+            "the edit must have claimed ownership (vacuous-pass guard)"
+        );
+
+        // Decay needs the NEXT tick's re-issue (arrival leaves the body
+        // with velocity = displacement / dt), so run one more update
+        // before asserting the velocity has returned toward zero.
+        app.update();
         let velocity = app.world().get::<LinearVelocity>(entity).unwrap();
         assert!(
             velocity.x.abs() < 0.1,
