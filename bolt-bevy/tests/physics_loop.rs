@@ -1553,8 +1553,12 @@ fn test_transform_driven_kinematic_tracks_a_moving_parent_frame() {
     // The frame claim: the child's world x tracks the parent's CURRENT x
     // (its Jolt-fresh frame). Gate at 2 cm: the correct per-tick frame is
     // sub-millimeter; a GlobalTransform-derived frame would lag one whole
-    // update (~100 mm of parent drift at this pacing) and fail; the
-    // entity-Jolt-pose mistake never rises at all (caught above).
+    // update (~100 mm of parent drift at this test's 100 ms manual batches
+    // — the gate is coupled to that pacing and would need tightening under
+    // real-time ~16 ms frames) and fail. The entity-Jolt-pose mistake used
+    // as the target freezes the child (caught by the rise assert above);
+    // used as the parent frame instead, it runaways upward (caught by this
+    // x-gate).
     assert!(
         (child_global.translation().x - parent_x).abs() < 0.02,
         "child not tracking the parent's current frame: child x = {}, parent x = {parent_x}",
