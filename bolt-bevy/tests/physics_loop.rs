@@ -1475,3 +1475,89 @@ fn test_transform_driven_platform_halts_when_script_stops() {
         "platform drifted after its script stopped: {x_final} vs {x_parked}"
     );
 }
+
+/// Test-only marker for the parented kinematic rider of the frame test.
+#[derive(Component)]
+struct RisingKinematicChild;
+
+fn raise_kinematic_child(
+    time: Res<Time<Fixed>>,
+    mut children: Query<&mut Transform, With<RisingKinematicChild>>,
+) {
+    for mut transform in &mut children {
+        transform.translation.y += 0.5 * time.delta_secs();
+    }
+}
+
+#[test]
+fn test_transform_driven_kinematic_tracks_a_moving_parent_frame() {
+    // Covers the parented branch of move_transform_driven_kinematics —
+    // the subtlest code in the feature (the frame must be computed on the
+    // PARENT; on the entity, its JoltBody would make the helper return the
+    // body's Jolt pose and silently discard the user's edit). The child is
+    // deliberately 2 m off the parent so no contact exists: its world
+    // motion comes purely from the composed target frame, nothing else.
+    let mut app = physics_test_app();
+    app.world_mut().insert_resource(Gravity(Vec3::ZERO));
+
+    // Parent: dynamic box drifting at 1 m/s via the VELOCITY path (which
+    // also re-pins that a moving unmarked kinematic-free body is never
+    // bothered by the per-tick system).
+    let parent = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+            LinearVelocity(Vec3::new(1.0, 0.0, 0.0)),
+        ))
+        .id();
+
+    // Child: kinematic, parented, local (0, 2, 0) → spawns at world
+    // (0, 12, 0). The script raises its LOCAL y at 0.5 m/s; the world
+    // result must be parent's current frame × local — carried in x by the
+    // parent's drift AND raised in y, with no contact doing any of it.
+    let child = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 2.0, 0.0),
+            ChildOf(parent),
+            RigidBody::Kinematic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.25),
+            },
+            RisingKinematicChild,
+        ))
+        .id();
+
+    app.add_systems(
+        FixedUpdate,
+        raise_kinematic_child.before(bolt_bevy::systems::PhysicsSet::Spawn),
+    );
+
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // Precondition: the parent drifted (velocity path, default damping —
+    // observed ~0.87 m, gate 0.8) and the child actually rose.
+    let parent_x = app.world().get::<Transform>(parent).unwrap().translation.x;
+    assert!(parent_x > 0.8, "parent barely moved (x = {parent_x})");
+    let child_global = app.world().get::<GlobalTransform>(child).unwrap();
+    assert!(
+        child_global.translation().y > 12.2,
+        "child did not rise via its local edits: {}",
+        child_global.translation()
+    );
+
+    // The frame claim: the child's world x tracks the parent's CURRENT x
+    // (its Jolt-fresh frame). Gate at 2 cm: the correct per-tick frame is
+    // sub-millimeter; a GlobalTransform-derived frame would lag one whole
+    // update (~100 mm of parent drift at this pacing) and fail; the
+    // entity-Jolt-pose mistake never rises at all (caught above).
+    assert!(
+        (child_global.translation().x - parent_x).abs() < 0.02,
+        "child not tracking the parent's current frame: child x = {}, parent x = {parent_x}",
+        child_global.translation().x
+    );
+}
