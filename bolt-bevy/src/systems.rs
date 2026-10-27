@@ -470,6 +470,14 @@ pub fn apply_user_transforms(
         // Tick precedence (not `is_added`, whose "since this system last
         // ran" semantics treat everything as new on a system's first run)
         // works both in the pipeline and under run_system_once tests.
+        //
+        // Two known edges, both accepted: the raw u32 compare is not
+        // wraparound-aware, so after ~2^31 change-tick increments Bevy's
+        // tick clamping can misread an ancient spawn as newer than a fresh
+        // edit (false-negative only: the edit is skipped, never a false
+        // claim); and a Commands-queued Transform write landing on the
+        // JoltBody's own flush tick is treated as placement forever —
+        // "placement wins" is the safe reading of an ambiguous case.
         if transform.last_changed().get() <= jolt_body_ref.last_changed().get() {
             continue;
         }
@@ -481,6 +489,10 @@ pub fn apply_user_transforms(
             // drive reads the user's intent directly. The auto sync point
             // on this system's ordering edge flushes the marker before the
             // move system runs, so the edit lands on this same tick's step.
+            // Tiebreak: a velocity write and a Transform edit on the same
+            // tick means this claim runs AFTER apply_velocities' strip —
+            // the Transform edit wins, ownership following the most recent
+            // authoring intent.
             commands.entity(entity).insert(TransformDriven);
             continue;
         }
@@ -920,10 +932,14 @@ mod tests {
             "marked kinematic should have arrived at the target, got x = {}",
             pos.x
         );
-        // And the drive is velocity-honest: sync wrote it back to the
-        // component (it decays to ~0 once arrived, so only assert it's sane).
+        // And the drive decays: once arrived, the per-tick re-issue
+        // (target == current) drives the velocity back toward zero.
         let velocity = app.world().get::<LinearVelocity>(entity).unwrap();
-        assert!(velocity.x.is_finite());
+        assert!(
+            velocity.x.abs() < 0.1,
+            "velocity should decay after arrival, got {}",
+            velocity.x
+        );
     }
 
     #[test]
