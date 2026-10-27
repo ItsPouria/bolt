@@ -116,6 +116,10 @@ pub fn spawn_physics_bodies(
                 }
                 let mut entity_cmds = commands.entity(entity);
                 entity_cmds.insert(JoltBody(id));
+                // A respawn is a fresh body: a marker from the previous one
+                // must not survive (e.g. a kinematic switched to dynamic
+                // would keep a stale TransformDriven the move refuses anyway).
+                entity_cmds.remove::<TransformDriven>();
                 if *rigidbody == RigidBody::Static {
                     entity_cmds.insert(StaticMarker);
                 } else {
@@ -717,6 +721,225 @@ mod tests {
             (pos.x - 0.0).abs() < 1e-6,
             "kinematic edit must not teleport; Jolt still at spawn, got {pos}"
         );
+    }
+
+    #[test]
+    fn test_velocity_write_reclaims_ownership_from_transform_driven() {
+        // The ownership tug-of-war, pinned: a Transform-driven kinematic
+        // (marked) whose user then hand-writes a velocity component must
+        // lose the marker — otherwise the per-tick move (target == current)
+        // cancels that velocity back to zero one tick later.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(BoltPlugin::default());
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Kinematic,
+                Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
+            ))
+            .id();
+
+        use bevy::ecs::system::RunSystemOnce;
+        let _ = app.world_mut().run_system_once(spawn_physics_bodies);
+        app.world_mut().flush();
+        // Advance the change tick between spawn and the edit, as the real
+        // schedule does between system runs.
+        let _ = app.world_mut().run_system_once(sync_transforms);
+
+        // Claim ownership: a genuine Transform edit.
+        {
+            let mut transform = app.world_mut().get_mut::<Transform>(entity).unwrap();
+            transform.translation.x += 0.005;
+        }
+        let _ = app.world_mut().run_system_once(apply_user_transforms);
+        app.world_mut().flush();
+        assert!(
+            app.world()
+                .get::<crate::components::TransformDriven>(entity)
+                .is_some(),
+            "precondition: the Transform edit must claim ownership first"
+        );
+
+        // The user hand-writes a velocity: apply_velocities must strip the
+        // marker so the velocity path takes over.
+        {
+            let mut velocity = app.world_mut().get_mut::<LinearVelocity>(entity).unwrap();
+            velocity.x = 2.0;
+        }
+        let _ = app.world_mut().run_system_once(apply_velocities);
+        app.world_mut().flush();
+
+        assert!(
+            app.world()
+                .get::<crate::components::TransformDriven>(entity)
+                .is_none(),
+            "a user velocity write must reclaim ownership from TransformDriven"
+        );
+    }
+
+    #[test]
+    fn test_respawn_strips_transform_driven() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(BoltPlugin::default());
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Kinematic,
+                Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
+            ))
+            .id();
+
+        use bevy::ecs::system::RunSystemOnce;
+        let _ = app.world_mut().run_system_once(spawn_physics_bodies);
+        app.world_mut().flush();
+        let _ = app.world_mut().run_system_once(sync_transforms);
+
+        // Claim ownership first, so the strip has something to strip.
+        {
+            let mut transform = app.world_mut().get_mut::<Transform>(entity).unwrap();
+            transform.translation.x += 0.005;
+        }
+        let _ = app.world_mut().run_system_once(apply_user_transforms);
+        app.world_mut().flush();
+        assert!(
+            app.world()
+                .get::<crate::components::TransformDriven>(entity)
+                .is_some()
+        );
+
+        // A genuine collider change triggers a respawn: fresh body, so the
+        // marker must not survive it.
+        {
+            let mut collider = app.world_mut().get_mut::<Collider>(entity).unwrap();
+            *collider = Collider::Box {
+                half_extents: Vec3::splat(2.0),
+            };
+        }
+        let _ = app.world_mut().run_system_once(spawn_physics_bodies);
+        app.world_mut().flush();
+
+        assert!(
+            app.world()
+                .get::<crate::components::TransformDriven>(entity)
+                .is_none(),
+            "a respawned body must start with fresh ownership"
+        );
+        // And the respawn itself worked.
+        assert!(app.world().get::<JoltBody>(entity).is_some());
+    }
+
+    #[test]
+    fn test_per_tick_drive_moves_marked_body_to_target() {
+        // End-to-end through the wired pipeline: claim ownership with a
+        // Transform edit, let the per-tick system drive, and the body
+        // arrives at the target with real velocity.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TransformPlugin);
+        app.add_plugins(BoltPlugin::default());
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 64.0),
+            ));
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Kinematic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+            ))
+            .id();
+
+        // Spawn tick: the birth-tick discriminator must keep the body
+        // unmarked (placement is not an edit).
+        app.update();
+        assert!(
+            app.world()
+                .get::<crate::components::TransformDriven>(entity)
+                .is_none(),
+            "spawn placement must not claim ownership"
+        );
+
+        // A genuine edit: move the target 3 m sideways.
+        {
+            let mut transform = app.world_mut().get_mut::<Transform>(entity).unwrap();
+            transform.translation.x = 3.0;
+        }
+
+        // Enough updates for: claim (tick k), move_issued (k), landing
+        // (step of k), and sync to write the result back.
+        for _ in 0..10 {
+            app.update();
+        }
+
+        let pw = app.world().get_resource::<PhysicsWorld>().unwrap();
+        let handle = app.world().get::<JoltBody>(entity).unwrap().0;
+        let (pos, _) = pw.get_transform(handle).unwrap();
+        assert!(
+            pos.x > 2.9,
+            "marked kinematic should have arrived at the target, got x = {}",
+            pos.x
+        );
+        // And the drive is velocity-honest: sync wrote it back to the
+        // component (it decays to ~0 once arrived, so only assert it's sane).
+        let velocity = app.world().get::<LinearVelocity>(entity).unwrap();
+        assert!(velocity.x.is_finite());
+    }
+
+    #[test]
+    fn test_velocity_path_never_gets_marked() {
+        // The elevator's authoring path: only velocity writes, never a
+        // Transform edit. The marker must stay absent so the per-tick
+        // drive (which would cancel the velocity) never engages.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TransformPlugin);
+        app.add_plugins(BoltPlugin::default());
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 64.0),
+            ));
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Kinematic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+                LinearVelocity(Vec3::new(0.0, 2.0, 0.0)),
+            ))
+            .id();
+
+        for _ in 0..8 {
+            app.update();
+            assert!(
+                app.world()
+                    .get::<crate::components::TransformDriven>(entity)
+                    .is_none(),
+                "velocity writes alone must never claim ownership"
+            );
+        }
+
+        // And the body actually rose under its own velocity the whole time.
+        let pw = app.world().get_resource::<PhysicsWorld>().unwrap();
+        let handle = app.world().get::<JoltBody>(entity).unwrap().0;
+        let (pos, _) = pw.get_transform(handle).unwrap();
+        assert!(pos.y > 10.1, "velocity path broken: y = {}", pos.y);
     }
 
     // --- compute_world_affine: unit tests for every branch of the helper ---
