@@ -1396,3 +1396,82 @@ fn test_transform_driven_kinematic_platform_carries_dynamic_rider() {
         "crate not moving with the platform: velocity.x = {crate_velocity_x}"
     );
 }
+
+#[derive(Component)]
+struct StoppingPlatform;
+
+fn slide_then_stop(
+    time: Res<Time<Fixed>>,
+    mut elapsed: Local<f32>,
+    mut platforms: Query<&mut Transform, With<StoppingPlatform>>,
+) {
+    // Scripted for the first half second of simulated time, then hands off.
+    // `Local` accumulates fixed-tick time, so "stop" is in simulated time,
+    // immune to wall-clock jitter.
+    if *elapsed >= 0.5 {
+        return;
+    }
+    *elapsed += time.delta_secs();
+    for mut transform in &mut platforms {
+        transform.translation.x += 1.5 * time.delta_secs();
+    }
+}
+
+#[test]
+fn test_transform_driven_platform_halts_when_script_stops() {
+    let mut app = physics_test_app();
+
+    let platform = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            RigidBody::Kinematic,
+            Collider::Box {
+                half_extents: Vec3::new(1.5, 0.1, 1.5),
+            },
+            StoppingPlatform,
+        ))
+        .id();
+
+    app.add_systems(
+        FixedUpdate,
+        slide_then_stop.before(bolt_bevy::systems::PhysicsSet::Spawn),
+    );
+
+    // One second of updates covers ~0.9 s of ticks; the script stops at its
+    // own 0.5 s mark, strictly inside this window — so the first read is
+    // already the parked position (stopping at 1.0 s instead would land the
+    // halt early in the SECOND window and read legitimate motion as drift).
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    let x_parked = app
+        .world()
+        .get::<Transform>(platform)
+        .unwrap()
+        .translation
+        .x;
+    let v_parked = app.world().get::<LinearVelocity>(platform).unwrap().x;
+    assert!(
+        x_parked > 0.5,
+        "precondition: platform slid (x = {x_parked})"
+    );
+    assert!(
+        v_parked.abs() < 0.05,
+        "velocity must decay to ~0 once the script stops (got {v_parked})"
+    );
+
+    // A full second of silence: the platform must not drift (the per-tick
+    // re-issue decays the velocity rather than letting it persist).
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    let x_final = app
+        .world()
+        .get::<Transform>(platform)
+        .unwrap()
+        .translation
+        .x;
+    assert!(
+        (x_final - x_parked).abs() < 0.05,
+        "platform drifted after its script stopped: {x_final} vs {x_parked}"
+    );
+}
