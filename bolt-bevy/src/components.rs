@@ -204,9 +204,10 @@ pub struct ContinuousCollision;
 /// marked body, sync writes everything else.
 ///
 /// Removed when the user writes a velocity component (the velocity path
-/// takes over) or the body is respawned. Managed by Bolt: inserting it
-/// manually on a non-kinematic does nothing (the per-tick move is refused
-/// by the kinematic-only guard in bolt-core).
+/// takes over) or the body is respawned. Managed by Bolt. Manual
+/// insertion: on a non-kinematic it is inert (the drive skips it and sync
+/// keeps mirroring); on a kinematic it claims the drive immediately,
+/// halting velocity-path motion at the body's current pose.
 #[derive(Component, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Component)]
 pub struct TransformDriven;

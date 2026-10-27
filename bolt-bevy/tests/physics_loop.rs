@@ -1557,8 +1557,9 @@ fn test_transform_driven_kinematic_tracks_a_moving_parent_frame() {
     // — the gate is coupled to that pacing and would need tightening under
     // real-time ~16 ms frames) and fail. The entity-Jolt-pose mistake used
     // as the target freezes the child (caught by the rise assert above);
-    // used as the parent frame instead, it runaways upward (caught by this
-    // x-gate).
+    // used as the parent frame instead, the parent's drift is excluded from
+    // the target and the x-gate catches the lag (the accompanying upward
+    // runaway is what the y-side would show).
     assert!(
         (child_global.translation().x - parent_x).abs() < 0.02,
         "child not tracking the parent's current frame: child x = {}, parent x = {parent_x}",

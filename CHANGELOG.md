@@ -102,7 +102,13 @@ All notable changes to this project will be documented in this file.
   are carried by friction: the acceptance test's crate tracks a 1.5 m/s
   sliding platform at exactly the predicted μ-limited arithmetic
   (0.93 m × tick quantization = 0.837 m measured), and a parented
-  kinematic tracks a moving parent's frame to sub-millimeter.
+  kinematic tracks a moving parent's frame to sub-millimeter. Hardening
+  from review: the mirror skip is kinematic-gated (a hand-inserted marker
+  on a dynamic body no longer freezes its ECS mirror), the drive halts on
+  non-finite targets — checked on the composed target, so a NaN parent is
+  caught too, with the halt warning only when a runaway is actually
+  stopped — and the marker joins every removal path (observers and failed
+  fresh spawns), so it can never outlive its body.
 - bolt-bevy now re-exports `BodyHandle` and `RayHit` (crate root and prelude):
   types returned by its public API are nameable without a direct bolt-core
   dependency.
