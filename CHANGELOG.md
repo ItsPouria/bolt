@@ -91,7 +91,10 @@ All notable changes to this project will be documented in this file.
   the #4 Fix A machinery (on the parent — the entity's own Jolt pose
   would discard the edit); scale is dropped, as `move_kinematic` takes
   only a pose. bolt-bevy's `PhysicsWorld` wrapper gains the delegating
-  `move_kinematic` method. Riders are carried by friction: the
+  `move_kinematic` method. Ownership arbitration is complete: a user
+  velocity write reclaims the body for the velocity path, and a respawn
+  strips the marker (fresh bodies start unowned — a Kinematic → Dynamic
+  switch leaves no stale note). Riders are carried by friction: the
   acceptance test's crate tracks a 1.5 m/s sliding platform at exactly
   the predicted μ-limited arithmetic (0.93 m × tick quantization =
   0.837 m measured).
@@ -199,6 +202,11 @@ All notable changes to this project will be documented in this file.
 - The velocity and gravity tests document that all Bolt bodies carry Jolt's
   default linear damping (0.05/s); #8 exposed that default as spawn-time
   configuration (see Added).
+- Kinematic-ownership coverage (#4, Fix B): respawn strips `TransformDriven`;
+  the per-tick drive carries a marked body to its target through the wired
+  pipeline; the velocity path never gets marked; a velocity write reclaims
+  ownership; and a transform-driven platform halts when its script stops —
+  the per-tick decay pinned at the ECS level.
 - Determinism probe (#7, item 5): twin worlds — identical config, spawns,
   and 120 steps — agree bit-exactly on every body transform, both
   single-threaded and across a 4-thread job system (0 flakes in 50 runs).
