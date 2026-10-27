@@ -202,7 +202,7 @@ pub fn sync_transforms(
             Option<&mut AngularVelocity>,
             Option<&TransformDriven>,
         ),
-        (With<RigidBody>, Without<StaticMarker>),
+        Without<StaticMarker>,
     >,
     // Parents that are physics bodies: their world pose comes from Jolt
     // directly — fresher than any ECS read, and it touches no `Transform`,
@@ -491,8 +491,9 @@ pub fn apply_user_transforms(
         // can misfire in BOTH directions — an ancient spawn read as newer
         // than a fresh edit (skipped: a lost claim), or a placement write
         // at u32::MAX−k read as older than a post-wrap flush (a false
-        // claim at birth). The window is ~1–2 change ticks per 2^32
-        // increments; long-running servers that spawn kinematics
+        // claim at birth). The vulnerable window per wrap equals the
+        // spawn-to-edit gap (any pair straddling the wrap misfires, however
+        // far apart); long-running servers that spawn kinematics
         // continuously will eventually hit one. A wrap-aware compare
         // (half-range wrapping_sub, like Tick::is_newer) would close it if
         // this ever matters in practice. And a Commands-queued Transform
@@ -562,24 +563,19 @@ pub fn move_transform_driven_kinematics(
     // Reads the entity's local Transform, which for marked bodies is pure
     // user intent (sync does not mirror into it — that mirroring is what
     // laundered the parent frame out of the target for parented bodies).
-    query: Query<(&JoltBody, &Transform, Option<&ChildOf>), With<TransformDriven>>,
+    query: Query<(&JoltBody, &RigidBody, &Transform, Option<&ChildOf>), With<TransformDriven>>,
     parent_bodies: Query<&JoltBody, With<RigidBody>>,
     body_globals: Query<&GlobalTransform, With<RigidBody>>,
     plain_hierarchy: Query<(Option<&ChildOf>, &Transform), Without<RigidBody>>,
     time: Res<Time<Fixed>>,
 ) {
     let delta_time = time.delta_secs();
-    for (body, transform, child_of) in query.iter() {
-        // Refusal semantics: a non-finite target is a script bug, and
-        // bolting it through move_kinematic would leave the body holding
-        // its LAST drive velocity forever (bolt-core's persistence
-        // contract) — a runaway. Halt instead: zero both velocities and
-        // skip this tick's move. The ECS local stays whatever the script
-        // wrote (Bevy's standard NaN behavior), but the simulation stops.
-        if !transform.translation.is_finite() || !transform.rotation.is_finite() {
-            warn!("TransformDriven target is non-finite; halting body to prevent a runaway");
-            physics_world.set_linear_velocity(body.0, Vec3::ZERO);
-            physics_world.set_angular_velocity(body.0, Vec3::ZERO);
+    for (body, rigidbody, transform, child_of) in query.iter() {
+        // ECS-side kinematic gate: a hand-inserted marker on a dynamic or
+        // static body is inert (the drive refuses non-kinematics in
+        // bolt-core), so skip it here rather than paying a futile
+        // GetMotionType FFI refusal every tick.
+        if *rigidbody != RigidBody::Kinematic {
             continue;
         }
 
@@ -600,6 +596,30 @@ pub fn move_transform_driven_kinematics(
         };
         // Scale is deliberately dropped: MoveKinematic takes only the pose.
         let (_, rotation, position) = target_affine.to_scale_rotation_translation();
+
+        // Refusal semantics, checked on the FINISHED target: NaN can enter
+        // through any ingredient — the entity's local, a plain parent's
+        // transform, a NaN scale via the parent frame — and all routes
+        // converge here, after the composition. Sending a non-finite
+        // target would be refused by move_kinematic's pre-FFI guard,
+        // leaving the body holding its LAST drive velocity forever
+        // (bolt-core's persistence contract) — a runaway, potentially
+        // triggered by a sibling script's bad parent transform rather
+        // than this body's own code. Halt instead. The warn fires only
+        // when there is actually a runaway to stop (velocity non-zero),
+        // so a persistently-poisoned script logs once, not per tick.
+        if !position.is_finite() || !rotation.is_finite() {
+            if physics_world
+                .get_linear_velocity(body.0)
+                .is_some_and(|v| v != Vec3::ZERO)
+            {
+                warn!("TransformDriven target is non-finite; halting body to prevent a runaway");
+            }
+            physics_world.set_linear_velocity(body.0, Vec3::ZERO);
+            physics_world.set_angular_velocity(body.0, Vec3::ZERO);
+            continue;
+        }
+
         physics_world.move_kinematic(body.0, position, rotation, delta_time);
     }
 }
@@ -1062,6 +1082,90 @@ mod tests {
         assert!(
             (pos_after.x - driven_pos.x).abs() < 0.05,
             "halted body must not drift: {pos_after} vs {driven_pos}"
+        );
+    }
+
+    #[test]
+    fn test_non_finite_parent_halts_driven_child_instead_of_runaway() {
+        // The parent-route pin: NaN can enter the drive target through the
+        // PARENT's transform, not just the entity's own local — the
+        // composed target is parent frame x local, and move_kinematic's
+        // pre-FFI guard refusing the NaN result leaves the body holding
+        // its last drive velocity forever (persistence contract). The
+        // child's own code is healthy; it gets poisoned through its
+        // parent. Review-probe confirmed the pre-fix runaway: 12 m in
+        // four ticks at last drive velocity.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TransformPlugin);
+        app.add_plugins(BoltPlugin::default());
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 64.0),
+            ));
+
+        let parent = app
+            .world_mut()
+            .spawn(Transform::from_xyz(0.0, 10.0, 0.0))
+            .id();
+        let child = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(2.0, 0.0, 0.0),
+                ChildOf(parent),
+                RigidBody::Kinematic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+            ))
+            .id();
+
+        // Warm up, then drive the child sideways to establish velocity.
+        for _ in 0..2 {
+            app.update();
+        }
+        {
+            let mut transform = app.world_mut().get_mut::<Transform>(child).unwrap();
+            transform.translation.x = 5.0;
+        }
+        app.update();
+        let (handle, driven_pos) = {
+            let pw = app.world().get_resource::<PhysicsWorld>().unwrap();
+            let handle = app.world().get::<JoltBody>(child).unwrap().0;
+            let (pos, _) = pw.get_transform(handle).unwrap();
+            (handle, pos)
+        };
+        assert!(
+            driven_pos.x > 4.9,
+            "precondition: child was driven, got {driven_pos}"
+        );
+
+        // The sibling script's bug: poison the PARENT. The child's own
+        // local stays finite throughout.
+        {
+            let mut transform = app.world_mut().get_mut::<Transform>(parent).unwrap();
+            transform.translation.x = f32::NAN;
+        }
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let velocity = app.world().get::<LinearVelocity>(child).unwrap();
+        assert!(
+            velocity.length() < 0.1,
+            "non-finite parent must halt the driven child, velocity = {:?}",
+            velocity.0
+        );
+        let pos_after = app
+            .world()
+            .get_resource::<PhysicsWorld>()
+            .unwrap()
+            .get_transform(handle)
+            .unwrap()
+            .0;
+        assert!(
+            (pos_after.x - driven_pos.x).abs() < 0.05,
+            "halted child must not drift: {pos_after} vs {driven_pos}"
         );
     }
 
