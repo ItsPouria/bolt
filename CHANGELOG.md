@@ -94,10 +94,15 @@ All notable changes to this project will be documented in this file.
   `move_kinematic` method. Ownership arbitration is complete: a user
   velocity write reclaims the body for the velocity path, and a respawn
   strips the marker (fresh bodies start unowned — a Kinematic → Dynamic
-  switch leaves no stale note). Riders are carried by friction: the
-  acceptance test's crate tracks a 1.5 m/s sliding platform at exactly
-  the predicted μ-limited arithmetic (0.93 m × tick quantization =
-  0.837 m measured).
+  switch leaves no stale note). A marked body's local `Transform` is
+  user-authoritative — `sync_transforms` skips mirroring into it (that
+  mirror-write laundered the parent's motion out of the drive target for
+  parented bodies, making them hold a fixed world pose instead of
+  tracking the parent frame); velocity components still mirror. Riders
+  are carried by friction: the acceptance test's crate tracks a 1.5 m/s
+  sliding platform at exactly the predicted μ-limited arithmetic
+  (0.93 m × tick quantization = 0.837 m measured), and a parented
+  kinematic tracks a moving parent's frame to sub-millimeter.
 - bolt-bevy now re-exports `BodyHandle` and `RayHit` (crate root and prelude):
   types returned by its public API are nameable without a direct bolt-core
   dependency.
