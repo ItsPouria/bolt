@@ -415,9 +415,12 @@ pub fn apply_velocities(
 /// modified by the user this frame. Dynamic and static bodies are teleported
 /// to the new pose. Kinematic bodies instead claim [`TransformDriven`]
 /// ownership: the per-tick MoveKinematic path drives them toward the
-/// ECS-derived pose with real velocity, so riders get carried — at the cost
-/// of the first edit taking effect one tick later (marker, then the next
-/// tick's move, then the position landing on the following step).
+/// ECS-derived pose with real velocity, so riders get carried. The edit
+/// lands on the SAME tick it is made: Bevy's auto-inserted sync point on
+/// this system's explicit ordering edge flushes the marker before
+/// `move_transform_driven_kinematics` runs, and that tick's `step` lands
+/// the pose (any latency a user feels is FixedUpdate scheduling, not the
+/// marker chain).
 #[allow(clippy::type_complexity)]
 pub fn apply_user_transforms(
     mut commands: Commands,
@@ -456,9 +459,10 @@ pub fn apply_user_transforms(
         }
 
         if *rigidbody == RigidBody::Kinematic {
-            // Don't teleport: hand ownership to the per-tick MoveKinematic path.
-            // Note the honest latency: the first edit takes effect one tick later
-            // (marker -> next tick's move_kinematic -> lands the step after).
+            // Don't teleport: hand ownership to the per-tick MoveKinematic
+            // path. The auto sync point on this system's ordering edge
+            // flushes the marker before the move system runs, so the edit
+            // lands on this same tick's step.
             commands.entity(entity).insert(TransformDriven);
             continue;
         }
@@ -712,8 +716,9 @@ mod tests {
                 .is_some(),
             "kinematic Transform edit must claim TransformDriven ownership"
         );
-        // …and part 2: no teleport — Jolt is unmoved until the per-tick
-        // system drives it (one-tick honest latency, by design).
+        // …and part 2: no teleport — Jolt is unmoved at this instant
+        // because only the claiming system has run; the move system and
+        // the landing happen later this same tick.
         let pw = app.world().get_resource::<PhysicsWorld>().unwrap();
         let handle = app.world().get::<JoltBody>(entity).unwrap().0;
         let (pos, _) = pw.get_transform(handle).unwrap();
@@ -879,11 +884,12 @@ mod tests {
             transform.translation.x = 3.0;
         }
 
-        // Enough updates for: claim (tick k), move_issued (k), landing
-        // (step of k), and sync to write the result back.
-        for _ in 0..10 {
-            app.update();
-        }
+        // ONE update must be enough: the marker flushes at the auto sync
+        // point on apply_user_transforms' ordering edge, the move system
+        // runs later in the same tick, and that tick's step lands the
+        // pose. This pins the same-tick landing the docs describe — if it
+        // ever regresses to a multi-tick chain, this fails.
+        app.update();
 
         let pw = app.world().get_resource::<PhysicsWorld>().unwrap();
         let handle = app.world().get::<JoltBody>(entity).unwrap().0;

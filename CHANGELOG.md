@@ -105,9 +105,10 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - Kinematic `Transform` edits no longer teleport the Jolt body (#4, Fix
   B): they claim `TransformDriven` ownership and move with real velocity
-  instead (see Added). Two consequences: the first edit takes effect one
-  tick later (marker, next tick's move, position on the following step) —
-  the price of velocity-honest motion — and the spawn-time bundle insert
+  instead (see Added). Two consequences: the edit lands on the same tick
+  it is made (the marker flushes at the auto sync point on the claiming
+  system's ordering edge, and that tick's step lands the pose), and the
+  spawn-time bundle insert
   is placement, never an edit: a Transform write that predates the body's
   creation tick does not claim ownership (otherwise every kinematic would
   be marked at birth and the per-tick move would cancel velocity-path
