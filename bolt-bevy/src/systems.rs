@@ -375,16 +375,29 @@ pub fn cleanup_despawned_physics_bodies(
 /// down into the internal Jolt physics engine before the next simulation step.
 #[allow(clippy::type_complexity)]
 pub fn apply_velocities(
+    mut commands: Commands,
     mut physics_world: ResMut<PhysicsWorld>,
     query: Query<
-        (&JoltBody, Option<&LinearVelocity>, Option<&AngularVelocity>),
+        (
+            Entity,
+            &JoltBody,
+            Option<&LinearVelocity>,
+            Option<&AngularVelocity>,
+            Option<&TransformDriven>,
+        ),
         (
             Or<(Changed<LinearVelocity>, Changed<AngularVelocity>)>,
             Without<StaticMarker>,
         ),
     >,
 ) {
-    for (body, lin_vel, ang_vel) in query.iter() {
+    for (entity, body, lin_vel, ang_vel, transform_driven) in query.iter() {
+        if transform_driven.is_some() {
+            // The user wrote a velocity by hand: the velocity path takes over,
+            // and the per-tick MoveKinematic drive must stop — otherwise next
+            // tick's move (target == current) would cancel this velocity.
+            commands.entity(entity).remove::<TransformDriven>();
+        }
         if let Some(vel) = lin_vel {
             physics_world.set_linear_velocity(body.0, **vel);
         }
