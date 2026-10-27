@@ -33,6 +33,7 @@ impl Plugin for BoltPlugin {
             .register_type::<crate::components::AngularDamping>()
             .register_type::<crate::components::StaticMarker>()
             .register_type::<crate::components::ContinuousCollision>()
+            .register_type::<crate::components::TransformDriven>()
             .register_type::<crate::config::PhysicsConfig>()
             .register_type::<crate::gravity::Gravity>();
 

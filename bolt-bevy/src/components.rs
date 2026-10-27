@@ -191,9 +191,22 @@ pub struct StaticMarker;
 #[reflect(Component)]
 pub struct ContinuousCollision;
 
-/// Marks a kinematic body as driven by user `Transform` edits: the
-/// per-tick kinematic system issues `move_kinematic` toward the
-/// ECS-derived pose. Removed when the user writes a velocity component
-/// (the velocity path takes over) or the body is respawned.
-#[derive(Component)]
+/// Marks a kinematic body as driven by user `Transform` edits.
+///
+/// While marked, the entity's local `Transform` is **user-authoritative**:
+/// `sync_transforms` deliberately does not mirror the physics state into
+/// it (that mirror-write is what laundered the parent's motion out of the
+/// drive target for parented bodies — the drive would chase its own tail
+/// and preserve the status-quo world pose instead of tracking the parent
+/// frame). The per-tick kinematic drive issues `move_kinematic` toward
+/// parent frame × local, so propagation renders the truth regardless, and
+/// each component keeps a single writer: the user writes the local of a
+/// marked body, sync writes everything else.
+///
+/// Removed when the user writes a velocity component (the velocity path
+/// takes over) or the body is respawned. Managed by Bolt: inserting it
+/// manually on a non-kinematic does nothing (the per-tick move is refused
+/// by the kinematic-only guard in bolt-core).
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
 pub struct TransformDriven;

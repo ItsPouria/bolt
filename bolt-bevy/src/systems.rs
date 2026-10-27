@@ -195,6 +195,7 @@ pub fn sync_transforms(
             &JoltBody,
             Option<&mut LinearVelocity>,
             Option<&mut AngularVelocity>,
+            Option<&TransformDriven>,
         ),
         (With<RigidBody>, Without<StaticMarker>),
     >,
@@ -220,7 +221,9 @@ pub fn sync_transforms(
         sync_tick.0 = Some(system_change_tick.this_run());
     }
 
-    for (mut transform, child_of, body, mut lin_vel, mut ang_vel) in query.iter_mut() {
+    for (mut transform, child_of, body, mut lin_vel, mut ang_vel, transform_driven) in
+        query.iter_mut()
+    {
         let active = physics_world.is_active(body.0);
 
         if !active {
@@ -244,7 +247,17 @@ pub fn sync_transforms(
         // local re-expression must continue or the ECS mirror drifts along
         // with the parent (#4). Stale handles return None and skip all of
         // this; a sleeping root body compares equal and writes nothing.
-        if let Some((world_pos, world_rot)) = physics_world.get_transform(body.0) {
+        //
+        // EXCEPT Transform-driven kinematics: their local Transform is
+        // user-authoritative (the drive's target is parent frame × local),
+        // and mirroring the Jolt pose back into it would launder the
+        // parent's motion out of the target — the drive would chase its
+        // own tail and hold the status-quo world pose instead of tracking
+        // the parent frame. Velocities still mirror; the drive lands the
+        // body at parent × local, so propagation renders the truth anyway.
+        if transform_driven.is_none()
+            && let Some((world_pos, world_rot)) = physics_world.get_transform(body.0)
+        {
             const POS_EPSILON_SQ: f32 = 1e-6;
             const ROT_EPSILON: f32 = 1e-5;
 
@@ -277,20 +290,23 @@ pub fn sync_transforms(
                     transform.rotation = world_rot;
                 }
             }
+        }
 
-            if active && (lin_vel.is_some() || ang_vel.is_some()) {
-                if let Some((jolt_lin_vel, jolt_ang_vel)) =
-                    physics_world.get_linear_and_angular_velocity(body.0)
-                {
-                    if let Some(mut velocity) = lin_vel {
-                        if velocity.0 != jolt_lin_vel {
-                            velocity.bypass_change_detection().0 = jolt_lin_vel;
-                        }
+        // Velocity mirroring runs for marked kinematics too (it cannot
+        // launder intent — it writes the velocity components, not the
+        // Transform): the stop test reads the drive's decay through it.
+        if active && (lin_vel.is_some() || ang_vel.is_some()) {
+            if let Some((jolt_lin_vel, jolt_ang_vel)) =
+                physics_world.get_linear_and_angular_velocity(body.0)
+            {
+                if let Some(mut velocity) = lin_vel {
+                    if velocity.0 != jolt_lin_vel {
+                        velocity.bypass_change_detection().0 = jolt_lin_vel;
                     }
-                    if let Some(mut velocity) = ang_vel {
-                        if velocity.0 != jolt_ang_vel {
-                            velocity.bypass_change_detection().0 = jolt_ang_vel;
-                        }
+                }
+                if let Some(mut velocity) = ang_vel {
+                    if velocity.0 != jolt_ang_vel {
+                        velocity.bypass_change_detection().0 = jolt_ang_vel;
                     }
                 }
             }
@@ -460,9 +476,11 @@ pub fn apply_user_transforms(
 
         if *rigidbody == RigidBody::Kinematic {
             // Don't teleport: hand ownership to the per-tick MoveKinematic
-            // path. The auto sync point on this system's ordering edge
-            // flushes the marker before the move system runs, so the edit
-            // lands on this same tick's step.
+            // path. From here on the entity's local Transform is
+            // user-authoritative (sync stops mirroring into it), so the
+            // drive reads the user's intent directly. The auto sync point
+            // on this system's ordering edge flushes the marker before the
+            // move system runs, so the edit lands on this same tick's step.
             commands.entity(entity).insert(TransformDriven);
             continue;
         }
@@ -508,6 +526,9 @@ pub fn apply_user_transforms(
 #[allow(clippy::type_complexity)]
 pub fn move_transform_driven_kinematics(
     mut physics_world: ResMut<PhysicsWorld>,
+    // Reads the entity's local Transform, which for marked bodies is pure
+    // user intent (sync does not mirror into it — that mirroring is what
+    // laundered the parent frame out of the target for parented bodies).
     query: Query<(&JoltBody, &Transform, Option<&ChildOf>), With<TransformDriven>>,
     parent_bodies: Query<&JoltBody, With<RigidBody>>,
     body_globals: Query<&GlobalTransform, With<RigidBody>>,
