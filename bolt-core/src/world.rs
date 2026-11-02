@@ -1719,6 +1719,147 @@ mod tests {
     }
 
     #[test]
+    fn test_add_impulse_changes_velocity_immediately_without_step() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        physics_world.set_gravity(Vec3::ZERO);
+        let handle = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 0))
+            .expect("Failed to spawn box");
+
+        // box_spawn's 1 m half-extents make a 2 m cube: 8 m³ × Jolt's
+        // default convex density of 1000 kg/m³ (ConvexShape.h) = 8000 kg.
+        // An 8000 N·s impulse on 8000 kg is Δv = 1 m/s.
+        physics_world.add_impulse(handle, Vec3::new(0.0, 8000.0, 0.0));
+
+        // The defining difference from add_force: velocity changes NOW,
+        // before any step — the impulse went straight into velocity, not
+        // into the step-cleared accumulator.
+        let velocity = physics_world.get_linear_velocity(handle).unwrap();
+        assert!(
+            velocity.distance(Vec3::new(0.0, 1.0, 0.0)) < 1e-6,
+            "impulse must change velocity immediately, got {velocity:?}"
+        );
+
+        // And it adds to whatever velocity is already there — Δv
+        // semantics, not an overwrite.
+        physics_world.set_linear_velocity(handle, Vec3::new(0.0, 0.5, 0.0));
+        physics_world.add_impulse(handle, Vec3::new(0.0, 8000.0, 0.0));
+        let velocity = physics_world.get_linear_velocity(handle).unwrap();
+        assert!(
+            velocity.distance(Vec3::new(0.0, 1.5, 0.0)) < 1e-6,
+            "impulse must add to existing velocity (Δv semantics), got {velocity:?}"
+        );
+    }
+
+    #[test]
+    fn test_add_force_waits_for_step_then_applies_analytically() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        physics_world.set_gravity(Vec3::ZERO);
+        let handle = physics_world
+            .spawn_body(BodySpawn {
+                // Zero damping keeps the analytic value exact (the default
+                // 0.05 would shave the integrated velocity slightly).
+                linear_damping: 0.0,
+                ..box_spawn(BodyType::Dynamic, 0)
+            })
+            .expect("Failed to spawn box");
+
+        // Two forces in one tick SUM — the accumulator is additive, which
+        // is the whole reason the method is `add_` and not `set_`.
+        physics_world.add_force(handle, Vec3::new(0.0, 4000.0, 0.0));
+        physics_world.add_force(handle, Vec3::new(0.0, 4000.0, 0.0));
+
+        // Before any step the force has done nothing: it sits in the
+        // accumulator — the mirror image of the impulse test above.
+        let before = physics_world.get_linear_velocity(handle).unwrap();
+        assert_eq!(before, Vec3::ZERO, "force must not act before a step");
+
+        // ΣF = 8000 N on 8000 kg → a = 1 m/s²; one 1/60 s step → Δv = 1/60.
+        physics_world.step(1.0 / 60.0, 1);
+        let after = physics_world.get_linear_velocity(handle).unwrap();
+        assert!(
+            (after.y - 1.0 / 60.0).abs() < 1e-5,
+            "ΣF/m·dt = {} m/s expected, got {}",
+            1.0 / 60.0,
+            after.y
+        );
+    }
+
+    #[test]
+    fn test_add_force_is_one_step_lived() {
+        // The accumulator contract: forces are consumed by the step they
+        // were waiting for and cleared afterwards (PhysicsSystem calls
+        // ResetForce/ResetTorque per body after every step). This is
+        // precisely why the ECS layer must re-issue ExternalForce every
+        // fixed tick instead of gating on Changed<ExternalForce>.
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        physics_world.set_gravity(Vec3::ZERO);
+        let handle = physics_world
+            .spawn_body(BodySpawn {
+                linear_damping: 0.0, // no decay: a surviving force would show exactly
+                ..box_spawn(BodyType::Dynamic, 0)
+            })
+            .expect("Failed to spawn box");
+
+        physics_world.add_force(handle, Vec3::new(0.0, 8000.0, 0.0));
+        physics_world.step(1.0 / 60.0, 1);
+        let after_first = physics_world.get_linear_velocity(handle).unwrap().y;
+        assert!((after_first - 1.0 / 60.0).abs() < 1e-5);
+
+        // Second step WITHOUT re-issuing: no force, no gravity, no
+        // damping → velocity must hold steady. If the accumulator
+        // survived the first step, this reads 2/60 instead.
+        physics_world.step(1.0 / 60.0, 1);
+        let after_second = physics_world.get_linear_velocity(handle).unwrap().y;
+        assert!(
+            (after_second - after_first).abs() < 1e-5,
+            "force accumulator must be cleared after the step that applied \
+             it: {after_first} then {after_second}"
+        );
+    }
+
+    #[test]
+    fn test_add_torque_spins_without_translating() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        physics_world.set_gravity(Vec3::ZERO);
+        let handle = physics_world
+            .spawn_body(BodySpawn {
+                angular_damping: 0.0, // keep the analytic value exact
+                ..box_spawn(BodyType::Dynamic, 0)
+            })
+            .expect("Failed to spawn box");
+
+        // A 2 m solid cube of 8000 kg carries I = m·s²/6 = 16000/3 kg·m²
+        // on every principal axis (MassProperties.cpp computes
+        // (y²+z², x²+z², x²+y²)·m/12). τ = 16000 N·m around +Y →
+        // α = 3 rad/s²; one 1/60 s step → ω = 0.05 rad/s.
+        physics_world.add_torque(handle, Vec3::new(0.0, 16000.0, 0.0));
+
+        let before = physics_world.get_angular_velocity(handle).unwrap();
+        assert_eq!(before, Vec3::ZERO, "torque must not act before a step");
+
+        physics_world.step(1.0 / 60.0, 1);
+        let angular = physics_world.get_angular_velocity(handle).unwrap();
+        assert!(
+            (angular.y - 0.05).abs() < 1e-4,
+            "τ/I·dt = 0.05 rad/s expected around +Y, got {angular:?}"
+        );
+
+        // A pure torque rotates about the center of mass: no linear
+        // velocity, no displacement.
+        let linear = physics_world.get_linear_velocity(handle).unwrap();
+        assert!(
+            linear.length() < 1e-6,
+            "pure torque must not translate, got {linear:?}"
+        );
+        let (position, _) = physics_world.get_transform(handle).unwrap();
+        assert!(
+            position.distance(Vec3::ZERO) < 1e-6,
+            "center of mass must stay put, got {position}"
+        );
+    }
+
+    #[test]
     fn test_getters_return_none_for_unallocated_body_id() {
         let physics_world = PhysicsWorld::new(WorldConfig::default());
         let unallocated = BodyHandle(BodyId::new(99_999));
