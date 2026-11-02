@@ -868,6 +868,115 @@ impl PhysicsWorld {
         }
     }
 
+    /// Adds a linear force, in newtons, to the body's force accumulator,
+    /// applied during the next [`step`](Self::step).
+    ///
+    /// The accumulator is cleared after every step — a force is
+    /// one-step-lived. Re-issue this every fixed tick to sustain a
+    /// continuous push (thrust, wind, springs); for an instant velocity
+    /// change (jumps, explosions), use
+    /// [`add_impulse`](Self::add_impulse) instead.
+    ///
+    /// Ignored (no FFI call) for stale handles and non-finite forces.
+    /// Sleeping bodies are woken, and non-dynamic bodies are silently
+    /// ignored by Jolt itself (its `BodyInterface` checks `IsDynamic()`
+    /// before accumulating — no motion-type guard is needed here, unlike
+    /// [`move_kinematic`](Self::move_kinematic)).
+    pub fn add_force(&mut self, handle: BodyHandle, force: Vec3) {
+        if !self.is_valid(handle) || !force.is_finite() {
+            return;
+        }
+
+        // SAFETY: `is_valid` guarantees the body ID is allocated and added in this PhysicsWorld.
+        unsafe {
+            let body_interface = self.body_interface();
+
+            let jolt_force = joltc_sys::JPC_Vec3 {
+                x: force.x,
+                y: force.y,
+                z: force.z,
+                _w: 0.0,
+            };
+
+            joltc_sys::JPC_BodyInterface_AddForce(body_interface, handle.0.raw(), jolt_force);
+        }
+    }
+
+    /// Adds a torque, in newton-meters, to the body's torque accumulator,
+    /// spinning the body up during the next [`step`](Self::step) — the
+    /// angular counterpart of [`add_force`](Self::add_force).
+    ///
+    /// The vector is world-space: its direction is the axis to spin
+    /// around (right-hand rule — thumb along the vector, fingers curl
+    /// the spin), and its magnitude is how hard to spin. A pure torque
+    /// rotates a body without moving its center of mass.
+    ///
+    /// The accumulator is cleared after every step — like forces,
+    /// torques are one-step-lived. Re-issue this every fixed tick to
+    /// sustain a continuous spin-up (motors, swivels). JoltC also offers
+    /// a one-shot angular impulse (`AddAngularImpulse`); it is not
+    /// wrapped here yet.
+    ///
+    /// Ignored (no FFI call) for stale handles and non-finite torques.
+    /// Sleeping bodies are woken, and non-dynamic bodies are silently
+    /// ignored by Jolt itself (its `BodyInterface` checks `IsDynamic()`
+    /// before accumulating — same as [`add_force`](Self::add_force)).
+    pub fn add_torque(&mut self, handle: BodyHandle, torque: Vec3) {
+        if !self.is_valid(handle) || !torque.is_finite() {
+            return;
+        }
+
+        // SAFETY: `is_valid` guarantees the body ID is allocated and added in this PhysicsWorld.
+        unsafe {
+            let body_interface = self.body_interface();
+            let jolt_torque = joltc_sys::JPC_Vec3 {
+                x: torque.x,
+                y: torque.y,
+                z: torque.z,
+                _w: 0.0,
+            };
+
+            joltc_sys::JPC_BodyInterface_AddTorque(body_interface, handle.0.raw(), jolt_torque);
+        }
+    }
+
+    /// Adds an impulse, in newton-seconds, to the body's center of mass —
+    /// an instant kick, the one-shot counterpart of
+    /// [`add_force`](Self::add_force).
+    ///
+    /// Impulses are not accumulated: the body's linear velocity changes
+    /// the moment this is called (`Δv = impulse / mass`, before any
+    /// [`step`](Self::step)), and because the impulse lands at the center
+    /// of mass it pushes without spinning the body. One call, one kick —
+    /// nothing persists and nothing needs re-issuing; for a sustained
+    /// push, re-issue [`add_force`](Self::add_force) every fixed tick
+    /// instead.
+    ///
+    /// Ignored (no FFI call) for stale handles and non-finite impulses.
+    /// Sleeping bodies are woken (Jolt activates the body explicitly,
+    /// rather than through the `EActivation` default the force family
+    /// uses), and non-dynamic bodies are silently ignored by Jolt itself
+    /// (its `BodyInterface` checks `IsDynamic()` before applying — same
+    /// as [`add_force`](Self::add_force)).
+    pub fn add_impulse(&mut self, handle: BodyHandle, impulse: Vec3) {
+        if !self.is_valid(handle) || !impulse.is_finite() {
+            return;
+        }
+
+        // SAFETY: `is_valid` guarantees the body ID is allocated and added in this PhysicsWorld.
+        unsafe {
+            let body_interface = self.body_interface();
+            let jolt_impulse = joltc_sys::JPC_Vec3 {
+                x: impulse.x,
+                y: impulse.y,
+                z: impulse.z,
+                _w: 0.0,
+            };
+
+            joltc_sys::JPC_BodyInterface_AddImpulse(body_interface, handle.0.raw(), jolt_impulse);
+        }
+    }
+
     /// Destroys the body with the given ID and releases its Jolt resources.
     ///
     /// Returns whether a registered body was destroyed; unknown or
