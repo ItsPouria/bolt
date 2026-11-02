@@ -1860,6 +1860,146 @@ mod tests {
     }
 
     #[test]
+    fn test_force_family_wakes_sleeping_bodies() {
+        // All three calls activate a sleeping body — impulse explicitly
+        // via ActivateBodies, force and torque via the shim-baked
+        // EActivation::Activate default. The precondition asserts are the
+        // point: without a genuinely sleeping body, this test proves
+        // nothing about wake-up.
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        physics_world
+            .spawn_body(BodySpawn {
+                // A wide floor, not box_spawn's 2 m cube: the second box
+                // sits at x = 5 and would fall off a cube-sized floor —
+                // a perpetually falling body never sleeps, and the
+                // precondition assert below catches exactly that.
+                shape: ShapeSpec::Box {
+                    half_extents: Vec3::new(50.0, 1.0, 50.0),
+                },
+                position: Vec3::new(0.0, -1.0, 0.0),
+                ..box_spawn(BodyType::Static, 0)
+            })
+            .expect("Failed to spawn floor"); // top face at y = 0
+
+        let impulsive = physics_world
+            .spawn_body(BodySpawn {
+                position: Vec3::new(0.0, 1.0, 0.0), // resting on the floor
+                ..box_spawn(BodyType::Dynamic, 1)
+            })
+            .expect("Failed to spawn box");
+        let pushed = physics_world
+            .spawn_body(BodySpawn {
+                position: Vec3::new(5.0, 1.0, 0.0),
+                ..box_spawn(BodyType::Dynamic, 2)
+            })
+            .expect("Failed to spawn box");
+
+        // 3 s of stepping: fall, settle, sleep (Jolt sleeps a still body
+        // after 0.5 s).
+        for _ in 0..180 {
+            physics_world.step(1.0 / 60.0, 1);
+        }
+        assert!(
+            !physics_world.is_active(impulsive),
+            "precondition: box must be asleep"
+        );
+        assert!(
+            !physics_world.is_active(pushed),
+            "precondition: box must be asleep"
+        );
+
+        physics_world.add_impulse(impulsive, Vec3::new(0.0, 80000.0, 0.0));
+        physics_world.add_force(pushed, Vec3::new(0.0, 800000.0, 0.0));
+
+        assert!(
+            physics_world.is_active(impulsive),
+            "impulse must wake a sleeping body"
+        );
+        assert!(
+            physics_world.is_active(pushed),
+            "force must wake a sleeping body"
+        );
+        // The impulse's velocity landed immediately, along with the wake:
+        // 80000 N·s on 8000 kg = 10 m/s upward.
+        let velocity = physics_world.get_linear_velocity(impulsive).unwrap();
+        assert!(
+            velocity.y > 9.0,
+            "impulse velocity should land with the wake, got {velocity:?}"
+        );
+    }
+
+    #[test]
+    fn test_force_family_refusal_sweep() {
+        let mut physics_world = PhysicsWorld::new(WorldConfig::default());
+        physics_world.set_gravity(Vec3::ZERO);
+
+        // Non-finite inputs on a live body: refused pre-FFI, and the
+        // refusal must protect the simulation, not merely avoid the call —
+        // a NaN that reached the accumulator would poison the step.
+        let live = physics_world
+            .spawn_body(box_spawn(BodyType::Dynamic, 0))
+            .expect("Failed to spawn box");
+        physics_world.add_force(live, Vec3::new(f32::NAN, 0.0, 0.0));
+        physics_world.add_torque(live, Vec3::new(0.0, f32::INFINITY, 0.0));
+        physics_world.add_impulse(live, Vec3::new(f32::NEG_INFINITY, 0.0, 0.0));
+        physics_world.step(1.0 / 60.0, 1);
+        let velocity = physics_world.get_linear_velocity(live).unwrap();
+        assert!(
+            velocity.is_finite(),
+            "a non-finite input poisoned the simulation: {velocity:?}"
+        );
+        assert_eq!(
+            velocity,
+            Vec3::ZERO,
+            "a non-finite input must not reach the accumulator"
+        );
+        let (position, _) = physics_world.get_transform(live).unwrap();
+        assert!(position.is_finite());
+
+        // Non-dynamic bodies: Jolt's own IsDynamic() gate silently ignores
+        // the entire family — no crash, no motion.
+        let static_handle = physics_world
+            .spawn_body(BodySpawn {
+                position: Vec3::new(10.0, 0.0, 0.0),
+                ..box_spawn(BodyType::Static, 1)
+            })
+            .expect("Failed to spawn static box");
+        let kinematic_handle = physics_world
+            .spawn_body(BodySpawn {
+                position: Vec3::new(20.0, 0.0, 0.0),
+                ..box_spawn(BodyType::Kinematic, 2)
+            })
+            .expect("Failed to spawn kinematic box");
+        for handle in [static_handle, kinematic_handle] {
+            physics_world.add_force(handle, Vec3::new(0.0, 8000.0, 0.0));
+            physics_world.add_torque(handle, Vec3::new(0.0, 16000.0, 0.0));
+            physics_world.add_impulse(handle, Vec3::new(0.0, 8000.0, 0.0));
+        }
+        physics_world.step(1.0 / 60.0, 1);
+        for (handle, expected) in [
+            (static_handle, Vec3::new(10.0, 0.0, 0.0)),
+            (kinematic_handle, Vec3::new(20.0, 0.0, 0.0)),
+        ] {
+            let (position, _) = physics_world.get_transform(handle).unwrap();
+            assert_eq!(
+                position, expected,
+                "non-dynamic body must ignore the force family"
+            );
+            assert_eq!(
+                physics_world.get_linear_velocity(handle).unwrap(),
+                Vec3::ZERO,
+                "non-dynamic body must gain no velocity from the force family"
+            );
+        }
+
+        // Stale handle: destroyed body, all three calls, no panic.
+        physics_world.destroy_body(live);
+        physics_world.add_force(live, Vec3::Y);
+        physics_world.add_torque(live, Vec3::Y);
+        physics_world.add_impulse(live, Vec3::Y);
+    }
+
+    #[test]
     fn test_getters_return_none_for_unallocated_body_id() {
         let physics_world = PhysicsWorld::new(WorldConfig::default());
         let unallocated = BodyHandle(BodyId::new(99_999));
