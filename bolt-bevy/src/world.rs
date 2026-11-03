@@ -320,4 +320,101 @@ mod tests {
         let (position, _) = world.get_transform(body_id).unwrap();
         assert!(position.distance(Vec3::new(1.0, 2.0, 3.0)) < 1e-4);
     }
+
+    /// Spawns the wrapper twin of core's `box_spawn` mule: a dynamic 1 m
+    /// half-extent box — 8 m³ at Jolt's default 1000 kg/m³ density means
+    /// **8000 kg** and **16000/3 kg·m²** of inertia per axis, the numbers
+    /// the analytic assertions below are built on (full narration in
+    /// bolt-core's `world.rs` tests).
+    fn spawn_dynamic_box(
+        world: &mut PhysicsWorld,
+        position: Vec3,
+        linear_damping: f32,
+        angular_damping: f32,
+    ) -> BodyHandle {
+        world
+            .spawn_body(BodySpawnRequest {
+                entity: Entity::PLACEHOLDER,
+                collider: &Collider::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
+                scale: Vec3::ONE,
+                position,
+                rotation: Quat::IDENTITY,
+                rigidbody: &RigidBody::Dynamic,
+                linear_velocity: Vec3::ZERO,
+                angular_velocity: Vec3::ZERO,
+                linear_damping,
+                angular_damping,
+                use_ccd: false,
+            })
+            .expect("wrapper spawn must succeed")
+    }
+
+    #[test]
+    fn test_wrapper_add_impulse_changes_velocity_immediately() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        world.set_gravity(Vec3::ZERO);
+        let body = spawn_dynamic_box(&mut world, Vec3::ZERO, 0.05, 0.05);
+
+        // 8000 N·s on the 8000 kg mule = Δv 1 m/s, readable before any
+        // step: the wrapper must forward to core's impulse, not to a
+        // step-cleared accumulator.
+        world.add_impulse(body, Vec3::new(0.0, 8000.0, 0.0));
+        let velocity = world.get_linear_velocity(body).unwrap();
+        assert!(
+            velocity.distance(Vec3::new(0.0, 1.0, 0.0)) < 1e-6,
+            "wrapper impulse must land immediately, got {velocity:?}"
+        );
+    }
+
+    #[test]
+    fn test_wrapper_add_force_waits_for_step() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        world.set_gravity(Vec3::ZERO);
+        // Zero damping keeps the analytic value exact.
+        let body = spawn_dynamic_box(&mut world, Vec3::ZERO, 0.0, 0.05);
+
+        world.add_force(body, Vec3::new(0.0, 8000.0, 0.0));
+        let before = world.get_linear_velocity(body).unwrap();
+        assert_eq!(
+            before,
+            Vec3::ZERO,
+            "force must sit in the accumulator until a step consumes it"
+        );
+
+        // ΣF/m·dt = 1 m/s² × 1/60 s.
+        world.step(1.0 / 60.0, 1);
+        let after = world.get_linear_velocity(body).unwrap();
+        assert!(
+            (after.y - 1.0 / 60.0).abs() < 1e-5,
+            "wrapper force must integrate to F/m·dt = {}, got {}",
+            1.0 / 60.0,
+            after.y
+        );
+    }
+
+    #[test]
+    fn test_wrapper_add_torque_spins_without_translating() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        world.set_gravity(Vec3::ZERO);
+        let body = spawn_dynamic_box(&mut world, Vec3::ZERO, 0.05, 0.0);
+
+        // 16000 N·m on 16000/3 kg·m² = 3 rad/s²; one 1/60 s step → 0.05.
+        world.add_torque(body, Vec3::new(0.0, 16000.0, 0.0));
+        world.step(1.0 / 60.0, 1);
+        let angular = world.get_angular_velocity(body).unwrap();
+        assert!(
+            (angular.y - 0.05).abs() < 1e-4,
+            "wrapper torque must spin at τ/I·dt = 0.05 rad/s, got {angular:?}"
+        );
+
+        // A pure torque rotates in place: the wrapper must not have
+        // forwarded the vector to a linear entry point.
+        let linear = world.get_linear_velocity(body).unwrap();
+        assert!(
+            linear.length() < 1e-6,
+            "wrapper torque leaked into linear velocity: {linear:?}"
+        );
+    }
 }
