@@ -209,6 +209,29 @@ impl PhysicsWorld {
         self.0.set_angular_velocity(handle, angular_velocity);
     }
 
+    /// Applies a one-shot impulse, in newton-seconds, to a dynamic body's
+    /// center of mass — velocity changes immediately (`Δv = impulse / mass`),
+    /// with nothing to re-issue; see [`CorePhysicsWorld::add_impulse`] for
+    /// the full contract.
+    pub fn add_impulse(&mut self, handle: BodyHandle, impulse: Vec3) {
+        self.0.add_impulse(handle, impulse);
+    }
+
+    /// Adds a continuous linear force, in newtons, to a dynamic body's
+    /// accumulator — consumed and cleared by the next [`step`](Self::step);
+    /// see [`CorePhysicsWorld::add_force`] for the full contract.
+    pub fn add_force(&mut self, handle: BodyHandle, force: Vec3) {
+        self.0.add_force(handle, force);
+    }
+
+    /// Adds a continuous torque, in newton-meters, to a dynamic body's
+    /// accumulator — same per-step contract as [`add_force`](Self::add_force);
+    /// the world-space vector's direction is the spin axis. See
+    /// [`CorePhysicsWorld::add_torque`] for the full contract.
+    pub fn add_torque(&mut self, handle: BodyHandle, torque: Vec3) {
+        self.0.add_torque(handle, torque);
+    }
+
     /// Reads the body's per-body payload (`entity.to_bits()` for entities
     /// spawned through bolt-bevy); see [`CorePhysicsWorld::user_data`].
     pub fn user_data(&self, handle: BodyHandle) -> Option<u64> {
