@@ -132,7 +132,8 @@ impl JoltBody {
 #[reflect(Component)]
 pub struct LinearVelocity(pub Vec3);
 
-/// The angular velocity of a rigid body in radians per second around the local X, Y, and Z axes.
+/// The angular velocity of a rigid body in radians per second, in
+/// world space — the vector's direction is the body's spin axis.
 ///
 /// Modifying this component will update the body's angular velocity in the physics engine.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
