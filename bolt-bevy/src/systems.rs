@@ -1967,6 +1967,52 @@ mod tests {
     }
 
     #[test]
+    fn test_impulse_reset_is_invisible_to_changed_consumers() {
+        // The bypass's only observable value: a downstream system
+        // filtering Changed<ExternalImpulse> must see exactly the user's
+        // writes. The reset after a kick — and the discard at the door —
+        // write through bypass_change_detection and must never masquerade
+        // as user intent (a plain-write regression would count 2+).
+        #[derive(Resource, Default)]
+        struct ObservedWrites(usize);
+        fn observer(mut seen: ResMut<ObservedWrites>, query: Query<(), Changed<ExternalImpulse>>) {
+            seen.0 += query.iter().count();
+        }
+
+        let (mut app, entity) = forces_app(Vec3::new(0.0, 10.0, 0.0));
+        app.init_resource::<ObservedWrites>();
+        // Placement is the discriminator: the observer must run BEFORE
+        // ApplyForces each update, so a phantom reset (a plain write, made
+        // after the observer's run but before its next one) becomes
+        // visible on the following update. An observer placed after
+        // ApplyForces would collapse user write and phantom into one
+        // change-window and pass vacuously — caught by mutation probe.
+        app.add_systems(FixedUpdate, observer.before(PhysicsSet::ApplyForces));
+        for _ in 0..3 {
+            app.update(); // warm-up; no writes yet
+        }
+
+        // The user writes once. The kick fires, the reset must be silent.
+        app.world_mut()
+            .get_entity_mut(entity)
+            .unwrap()
+            .insert(ExternalImpulse(Vec3::new(0.0, 1000.0, 0.0)));
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let seen = app.world().get_resource::<ObservedWrites>().unwrap().0;
+        assert_eq!(
+            seen, 1,
+            "observer must see exactly the one user write, saw {seen}"
+        );
+        assert_eq!(
+            *app.world().get::<ExternalImpulse>(entity).unwrap(),
+            ExternalImpulse(Vec3::ZERO)
+        );
+    }
+
+    #[test]
     fn test_fixed_update_schedule_has_no_ambiguous_pairs() {
         // Any two Bolt systems sharing ResMut<PhysicsWorld> without an
         // ordering edge make the FixedUpdate schedule ambiguous: the
