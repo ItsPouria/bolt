@@ -179,6 +179,57 @@ impl Default for AngularDamping {
     }
 }
 
+/// A continuous linear force, in newtons, applied to the body every
+/// fixed tick while this component is present.
+///
+/// The vector is world-space, and presence is the re-issue: Jolt clears
+/// its force accumulator after every step, so a sustained push (thrust,
+/// wind, springs) is inserted once and left alone — no per-tick writes.
+/// Only meaningful on dynamic bodies (Jolt silently ignores forces on
+/// statics and kinematics); pushes wake sleeping bodies. Applied through
+/// [`PhysicsWorld::add_force`](crate::world::PhysicsWorld::add_force).
+///
+/// The applying system is the ECS remainder of
+/// [#1](https://github.com/ItsPouria/bolt/issues/1) — until it lands,
+/// this component is declared but not consumed, and the wrapper method
+/// is the working path.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
+#[reflect(Component)]
+pub struct ExternalForce(pub Vec3);
+
+/// A continuous torque, in newton-meters, applied to the body every
+/// fixed tick while this component is present.
+///
+/// The angular sibling of [`ExternalForce`]: a world-space vector whose
+/// direction is the spin axis (right-hand rule), the same
+/// presence-is-the-re-issue contract, and the same dynamics-only
+/// meaning (Jolt silently ignores torque on statics and kinematics).
+/// Applied through
+/// [`PhysicsWorld::add_torque`](crate::world::PhysicsWorld::add_torque).
+///
+/// Wired by the same pending apply system as [`ExternalForce`] —
+/// [#1](https://github.com/ItsPouria/bolt/issues/1)'s remainder.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
+#[reflect(Component)]
+pub struct ExternalTorque(pub Vec3);
+
+/// A one-shot impulse, in newton-seconds: an instant velocity kick
+/// (`Δv = impulse / mass`) applied at the next tick, after which Bolt
+/// resets the component to `Vec3::ZERO`.
+///
+/// The reset is change-detection-safe (it never looks like a user
+/// write), so a fresh kick is always a fresh component write — insert,
+/// mutate, or write the same value again after a tick. Leaving it at
+/// zero does nothing. The vector is world-space and lands at the center
+/// of mass (a pure push, no spin). Only meaningful on dynamic bodies;
+/// wakes sleeping ones. Applied through
+/// [`PhysicsWorld::add_impulse`](crate::world::PhysicsWorld::add_impulse).
+///
+/// Wired by the pending apply system — [#1](https://github.com/ItsPouria/bolt/issues/1)'s remainder.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
+#[reflect(Component)]
+pub struct ExternalImpulse(pub Vec3);
+
 /// A marker component used to efficiently filter out static bodies from transform synchronization.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]
 #[reflect(Component)]
