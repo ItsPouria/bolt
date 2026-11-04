@@ -2,8 +2,8 @@ use bevy::math::Affine3A;
 use bevy::prelude::*;
 
 use crate::components::{
-    AngularDamping, AngularVelocity, JoltBody, LinearDamping, LinearVelocity, StaticMarker,
-    TransformDriven,
+    AngularDamping, AngularVelocity, ExternalForce, ExternalTorque, JoltBody, LinearDamping,
+    LinearVelocity, StaticMarker, TransformDriven,
 };
 use crate::config::PhysicsConfig;
 use crate::prelude::{Collider, RigidBody};
@@ -621,6 +621,56 @@ pub fn move_transform_driven_kinematics(
         }
 
         physics_world.move_kinematic(body.0, position, rotation, delta_time);
+    }
+}
+
+/// Re-issues [`ExternalForce`] and [`ExternalTorque`] into Jolt every
+/// fixed tick, unconditionally — deliberately *not* gated on `Changed`
+/// — because Jolt clears its per-body force and torque accumulators
+/// after every step: a change-gated force would apply for exactly one
+/// tick and then silently vanish while its component sits unchanged
+/// (core's `test_add_force_is_one_step_lived` pins this). The
+/// component's presence *is* the re-issue: a sustained push is inserted
+/// once and left alone.
+///
+/// Zero vectors are skipped rather than sent: Jolt's `AddForce` wakes
+/// the body even for a zero force (its activation default fires
+/// unconditionally inside the dynamic branch), so forwarding a calm
+/// wind's `Vec3::ZERO` every tick would pin holders awake forever.
+/// Skipping preserves the physics exactly — a zero force does nothing —
+/// while letting bodies sleep.
+///
+/// Non-dynamic bodies are skipped ECS-side rather than paying a futile
+/// FFI call Jolt would no-op itself — the same gate
+/// [`move_transform_driven_kinematics`] uses. Sleeping bodies are *not*
+/// skipped: a push is how they wake.
+#[allow(clippy::type_complexity)]
+pub fn apply_external_forces(
+    mut physics_world: ResMut<PhysicsWorld>,
+    query: Query<
+        (
+            &JoltBody,
+            &RigidBody,
+            Option<&ExternalForce>,
+            Option<&ExternalTorque>,
+        ),
+        Or<(With<ExternalForce>, With<ExternalTorque>)>,
+    >,
+) {
+    for (body, rigidbody, force, torque) in query.iter() {
+        if *rigidbody != RigidBody::Dynamic {
+            continue;
+        }
+        if let Some(force) = force
+            && **force != Vec3::ZERO
+        {
+            physics_world.add_force(body.0, **force);
+        }
+        if let Some(torque) = torque
+            && **torque != Vec3::ZERO
+        {
+            physics_world.add_torque(body.0, **torque);
+        }
     }
 }
 
