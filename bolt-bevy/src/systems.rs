@@ -18,6 +18,9 @@ pub enum PhysicsSet {
     ApplyVelocities,
     /// Applies gravity forces.
     ApplyGravity,
+    /// Re-issues continuous external forces/torques and applies one-shot
+    /// impulses from ECS components into Jolt, just before the step.
+    ApplyForces,
     /// Steps the physics simulation.
     Step,
     /// Synchronizes transforms from Jolt back to ECS.

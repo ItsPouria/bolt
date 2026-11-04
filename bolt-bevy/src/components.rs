@@ -186,13 +186,9 @@ impl Default for AngularDamping {
 /// its force accumulator after every step, so a sustained push (thrust,
 /// wind, springs) is inserted once and left alone — no per-tick writes.
 /// Only meaningful on dynamic bodies (Jolt silently ignores forces on
-/// statics and kinematics); pushes wake sleeping bodies. Applied through
+/// statics and kinematics); a non-zero push wakes a sleeping one.
+/// Applied through
 /// [`PhysicsWorld::add_force`](crate::world::PhysicsWorld::add_force).
-///
-/// The applying system is the ECS remainder of
-/// [#1](https://github.com/ItsPouria/bolt/issues/1) — until it lands,
-/// this component is declared but not consumed, and the wrapper method
-/// is the working path.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
 #[reflect(Component)]
 pub struct ExternalForce(pub Vec3);
@@ -206,9 +202,6 @@ pub struct ExternalForce(pub Vec3);
 /// meaning (Jolt silently ignores torque on statics and kinematics).
 /// Applied through
 /// [`PhysicsWorld::add_torque`](crate::world::PhysicsWorld::add_torque).
-///
-/// Wired by the same pending apply system as [`ExternalForce`] —
-/// [#1](https://github.com/ItsPouria/bolt/issues/1)'s remainder.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
 #[reflect(Component)]
 pub struct ExternalTorque(pub Vec3);
@@ -224,8 +217,6 @@ pub struct ExternalTorque(pub Vec3);
 /// of mass (a pure push, no spin). Only meaningful on dynamic bodies;
 /// wakes sleeping ones. Applied through
 /// [`PhysicsWorld::add_impulse`](crate::world::PhysicsWorld::add_impulse).
-///
-/// Wired by the pending apply system — [#1](https://github.com/ItsPouria/bolt/issues/1)'s remainder.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
 #[reflect(Component)]
 pub struct ExternalImpulse(pub Vec3);

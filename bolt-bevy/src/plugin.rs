@@ -46,6 +46,7 @@ impl Plugin for BoltPlugin {
                 crate::systems::PhysicsSet::Spawn,
                 crate::systems::PhysicsSet::ApplyVelocities,
                 crate::systems::PhysicsSet::ApplyGravity,
+                crate::systems::PhysicsSet::ApplyForces,
                 crate::systems::PhysicsSet::Step,
                 crate::systems::PhysicsSet::SyncTransforms,
             )
@@ -72,6 +73,10 @@ impl Plugin for BoltPlugin {
                     .in_set(crate::systems::PhysicsSet::ApplyVelocities)
                     .after(crate::systems::apply_user_transforms),
                 apply_gravity.in_set(crate::systems::PhysicsSet::ApplyGravity),
+                crate::systems::apply_external_forces
+                    .in_set(crate::systems::PhysicsSet::ApplyForces),
+                crate::systems::apply_external_impulses
+                    .in_set(crate::systems::PhysicsSet::ApplyForces),
                 step_physics.in_set(crate::systems::PhysicsSet::Step),
                 sync_transforms.in_set(crate::systems::PhysicsSet::SyncTransforms),
             ),
