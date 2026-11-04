@@ -75,8 +75,14 @@ impl Plugin for BoltPlugin {
                 apply_gravity.in_set(crate::systems::PhysicsSet::ApplyGravity),
                 crate::systems::apply_external_forces
                     .in_set(crate::systems::PhysicsSet::ApplyForces),
+                // Ordered explicitly: the two systems share ResMut<PhysicsWorld>
+                // (commutative in effect — one accumulates, the other kicks —
+                // but Bevy would otherwise flag the pair as ambiguously
+                // ordered, invisibly under MinimalPlugins and fatally for
+                // apps that escalate ambiguity_detection to Error).
                 crate::systems::apply_external_impulses
-                    .in_set(crate::systems::PhysicsSet::ApplyForces),
+                    .in_set(crate::systems::PhysicsSet::ApplyForces)
+                    .after(crate::systems::apply_external_forces),
                 step_physics.in_set(crate::systems::PhysicsSet::Step),
                 sync_transforms.in_set(crate::systems::PhysicsSet::SyncTransforms),
             ),

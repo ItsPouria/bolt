@@ -207,15 +207,15 @@ pub struct ExternalForce(pub Vec3);
 pub struct ExternalTorque(pub Vec3);
 
 /// A one-shot impulse, in newton-seconds: an instant velocity kick
-/// (`Δv = impulse / mass`) applied at the next tick, after which Bolt
-/// resets the component to `Vec3::ZERO`.
+/// (`Δv = impulse / mass`) applied at the next `ApplyForces` run,
+/// after which Bolt resets the component to `Vec3::ZERO`.
 ///
 /// The reset is change-detection-safe (it never looks like a user
 /// write), so a fresh kick is always a fresh component write — insert,
 /// mutate, or write the same value again after a tick. Leaving it at
 /// zero does nothing. The vector is world-space and lands at the center
-/// of mass (a pure push, no spin). Only meaningful on dynamic bodies;
-/// wakes sleeping ones. Applied through
+/// of mass (a pure push, no spin). Only meaningful on dynamic bodies; a
+/// non-zero kick wakes a sleeping one. Applied through
 /// [`PhysicsWorld::add_impulse`](crate::world::PhysicsWorld::add_impulse).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
 #[reflect(Component)]

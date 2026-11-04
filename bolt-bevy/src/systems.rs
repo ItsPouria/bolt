@@ -20,6 +20,8 @@ pub enum PhysicsSet {
     ApplyGravity,
     /// Re-issues continuous external forces/torques and applies one-shot
     /// impulses from ECS components into Jolt, just before the step.
+    /// The slot is a latency choice, not a correctness requirement — the
+    /// accumulator would treat a later re-issue exactly the same.
     ApplyForces,
     /// Steps the physics simulation.
     Step,
@@ -1562,7 +1564,11 @@ mod tests {
     fn test_push_family_ignores_non_dynamic_bodies() {
         // Static and kinematic bodies carry all three push components;
         // Jolt's IsDynamic() gate (plus the ECS-side skip) must leave
-        // both exactly where they spawned.
+        // both exactly where they spawned. Note this pins the ENGINE
+        // gate: audit probes show removing the ECS-side skip alone stays
+        // green, because Jolt masks it — the skip is kept to avoid a
+        // futile FFI call per tick (the kinematic-drive precedent), not
+        // because this test can see it.
         // The helper's dynamic mule floats untouched here (zero gravity);
         // the actual subjects spawn below.
         let (mut app, _mule) = forces_app(Vec3::new(0.0, 10.0, 0.0));
@@ -1716,7 +1722,9 @@ mod tests {
             .id();
 
         for _ in 0..192 {
-            app.update(); // 3 simulated seconds: fall, settle, sleep
+            // 3 simulated seconds to settle into sleep (the box spawns
+            // already resting — nothing falls; audit N3).
+            app.update();
         }
         let (physics_world, jolt_body) = {
             let world = app.world();
@@ -1730,5 +1738,35 @@ mod tests {
             "a zero ExternalForce must not keep its body awake — the system \
              must skip zero vectors rather than wake Jolt for nothing"
         );
+    }
+
+    #[test]
+    fn test_fixed_update_schedule_has_no_ambiguous_pairs() {
+        // Any two Bolt systems sharing ResMut<PhysicsWorld> without an
+        // ordering edge make the FixedUpdate schedule ambiguous: the
+        // warning is invisible under MinimalPlugins (no LogPlugin to
+        // print it), and apps that escalate ambiguity_detection to
+        // Error cannot build at all. Settings must be installed BEFORE
+        // the first schedule build, and real updates must follow --
+        // settings on an already-built schedule never re-check, and
+        // FixedUpdate initializes lazily (both audit rounds hit that
+        // vacuous-pass trap independently).
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TransformPlugin);
+        app.add_plugins(BoltPlugin::default());
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 64.0),
+            ));
+        app.world_mut().schedule_scope(FixedUpdate, |_, schedule| {
+            schedule.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
+                ambiguity_detection: bevy::ecs::schedule::LogLevel::Error,
+                ..Default::default()
+            });
+        });
+        for _ in 0..3 {
+            app.update(); // panics if any pair has indeterminate order
+        }
     }
 }
