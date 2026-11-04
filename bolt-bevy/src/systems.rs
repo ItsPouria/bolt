@@ -2,8 +2,8 @@ use bevy::math::Affine3A;
 use bevy::prelude::*;
 
 use crate::components::{
-    AngularDamping, AngularVelocity, ExternalForce, ExternalTorque, JoltBody, LinearDamping,
-    LinearVelocity, StaticMarker, TransformDriven,
+    AngularDamping, AngularVelocity, ExternalForce, ExternalImpulse, ExternalTorque, JoltBody,
+    LinearDamping, LinearVelocity, StaticMarker, TransformDriven,
 };
 use crate::config::PhysicsConfig;
 use crate::prelude::{Collider, RigidBody};
@@ -671,6 +671,31 @@ pub fn apply_external_forces(
         {
             physics_world.add_torque(body.0, **torque);
         }
+    }
+}
+
+/// Applies [`ExternalImpulse`] as a one-shot kick: every body whose
+/// component changed this tick receives the impulse — velocity changes
+/// immediately, `Δv = impulse / mass` — after which the component is
+/// reset to `Vec3::ZERO` through `bypass_change_detection`, so the
+/// reset never looks like a user write. A plain write would trip
+/// `Changed` again next tick and re-fire the same kick forever,
+/// turning the one-shot into a machine gun; the bypass keeps "a fresh
+/// kick is a fresh component write" true.
+///
+/// Zero vectors and non-dynamic bodies are skipped without an FFI call
+/// (Jolt ignores impulses on statics and kinematics anyway, and a zero
+/// impulse would still wake a sleeping body for nothing).
+pub fn apply_external_impulses(
+    mut physics_world: ResMut<PhysicsWorld>,
+    mut query: Query<(&JoltBody, &RigidBody, &mut ExternalImpulse), Changed<ExternalImpulse>>,
+) {
+    for (body, rigidbody, mut impulse) in query.iter_mut() {
+        if *rigidbody != RigidBody::Dynamic || **impulse == Vec3::ZERO {
+            continue;
+        }
+        physics_world.add_impulse(body.0, **impulse);
+        impulse.bypass_change_detection().0 = Vec3::ZERO;
     }
 }
 
