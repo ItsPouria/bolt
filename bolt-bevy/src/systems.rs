@@ -2,11 +2,11 @@ use bevy::math::Affine3A;
 use bevy::prelude::*;
 
 use crate::components::{
-    AngularDamping, AngularVelocity, ExternalForce, ExternalImpulse, ExternalTorque, JoltBody,
-    LinearDamping, LinearVelocity, StaticMarker, TransformDriven,
+    AngularDamping, AngularVelocity, Collider, ContinuousCollision, ExternalForce, ExternalImpulse,
+    ExternalTorque, JoltBody, LinearDamping, LinearVelocity, RigidBody, StaticMarker,
+    TransformDriven,
 };
 use crate::config::PhysicsConfig;
-use crate::prelude::{Collider, RigidBody};
 use crate::world::{BodySpawnRequest, PhysicsWorld};
 
 /// System sets for ordering physics execution.
@@ -60,7 +60,7 @@ pub fn spawn_physics_bodies(
             Option<&AngularVelocity>,
             Option<&LinearDamping>,
             Option<&AngularDamping>,
-            Option<&crate::components::ContinuousCollision>,
+            Option<&ContinuousCollision>,
         ),
         Or<(Changed<RigidBody>, Changed<Collider>)>,
     >,
@@ -731,6 +731,7 @@ pub fn remove_jolt_body_on_collider_removal(event: On<Remove<Collider>>, mut com
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gravity::Gravity;
     use crate::plugin::BoltPlugin;
 
     #[test]
@@ -878,9 +879,7 @@ mod tests {
 
         // New contract, part 1: the marker is claimed…
         assert!(
-            app.world()
-                .get::<crate::components::TransformDriven>(entity)
-                .is_some(),
+            app.world().get::<TransformDriven>(entity).is_some(),
             "kinematic Transform edit must claim TransformDriven ownership"
         );
         // …and part 2: no teleport — Jolt is unmoved at this instant
@@ -931,9 +930,7 @@ mod tests {
         let _ = app.world_mut().run_system_once(apply_user_transforms);
         app.world_mut().flush();
         assert!(
-            app.world()
-                .get::<crate::components::TransformDriven>(entity)
-                .is_some(),
+            app.world().get::<TransformDriven>(entity).is_some(),
             "precondition: the Transform edit must claim ownership first"
         );
 
@@ -947,9 +944,7 @@ mod tests {
         app.world_mut().flush();
 
         assert!(
-            app.world()
-                .get::<crate::components::TransformDriven>(entity)
-                .is_none(),
+            app.world().get::<TransformDriven>(entity).is_none(),
             "a user velocity write must reclaim ownership from TransformDriven"
         );
     }
@@ -983,11 +978,7 @@ mod tests {
         }
         let _ = app.world_mut().run_system_once(apply_user_transforms);
         app.world_mut().flush();
-        assert!(
-            app.world()
-                .get::<crate::components::TransformDriven>(entity)
-                .is_some()
-        );
+        assert!(app.world().get::<TransformDriven>(entity).is_some());
 
         // A genuine collider change triggers a respawn: fresh body, so the
         // marker must not survive it.
@@ -1001,9 +992,7 @@ mod tests {
         app.world_mut().flush();
 
         assert!(
-            app.world()
-                .get::<crate::components::TransformDriven>(entity)
-                .is_none(),
+            app.world().get::<TransformDriven>(entity).is_none(),
             "a respawned body must start with fresh ownership"
         );
         // And the respawn itself worked.
@@ -1044,9 +1033,7 @@ mod tests {
             app.update();
         }
         assert!(
-            app.world()
-                .get::<crate::components::TransformDriven>(entity)
-                .is_none(),
+            app.world().get::<TransformDriven>(entity).is_none(),
             "spawn placement must not claim ownership"
         );
 
@@ -1076,9 +1063,7 @@ mod tests {
         // The claim itself is pinned too: vacuous arrival via spawn
         // placement is no longer possible after the warm-up.
         assert!(
-            app.world()
-                .get::<crate::components::TransformDriven>(entity)
-                .is_some(),
+            app.world().get::<TransformDriven>(entity).is_some(),
             "the edit must have claimed ownership (vacuous-pass guard)"
         );
 
@@ -1278,9 +1263,7 @@ mod tests {
         for _ in 0..8 {
             app.update();
             assert!(
-                app.world()
-                    .get::<crate::components::TransformDriven>(entity)
-                    .is_none(),
+                app.world().get::<TransformDriven>(entity).is_none(),
                 "velocity writes alone must never claim ownership"
             );
         }
@@ -1479,8 +1462,7 @@ mod tests {
             .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
                 std::time::Duration::from_secs_f32(1.0 / 64.0),
             ));
-        app.world_mut()
-            .insert_resource(crate::gravity::Gravity(Vec3::ZERO));
+        app.world_mut().insert_resource(Gravity(Vec3::ZERO));
         let entity = app
             .world_mut()
             .spawn((
@@ -1729,7 +1711,7 @@ mod tests {
         let (physics_world, jolt_body) = {
             let world = app.world();
             (
-                world.get_resource::<crate::world::PhysicsWorld>().unwrap(),
+                world.get_resource::<PhysicsWorld>().unwrap(),
                 world.get::<JoltBody>(entity).unwrap().handle(),
             )
         };

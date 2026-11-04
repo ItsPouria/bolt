@@ -1,8 +1,17 @@
 use bevy::prelude::*;
 
+use crate::components::{
+    AngularDamping, AngularVelocity, Collider, ContinuousCollision, ExternalForce, ExternalImpulse,
+    ExternalTorque, LinearDamping, LinearVelocity, RigidBody, StaticMarker, TransformDriven,
+};
 use crate::config::PhysicsConfig;
 use crate::gravity::{Gravity, apply_gravity};
-use crate::systems::{apply_velocities, spawn_physics_bodies, step_physics, sync_transforms};
+use crate::systems::{
+    LastPhysicsSyncTick, PhysicsSet, apply_external_forces, apply_external_impulses,
+    apply_user_transforms, apply_velocities, cleanup_despawned_physics_bodies,
+    move_transform_driven_kinematics, remove_jolt_body_on_collider_removal,
+    remove_jolt_body_on_rigidbody_removal, spawn_physics_bodies, step_physics, sync_transforms,
+};
 use crate::world::PhysicsWorld;
 
 #[derive(Default, Debug)]
@@ -22,33 +31,33 @@ impl Plugin for BoltPlugin {
         // or a user-inserted one); later changes flow through `apply_gravity`.
         app.init_resource::<Gravity>();
         app.init_resource::<PhysicsWorld>();
-        app.init_resource::<crate::systems::LastPhysicsSyncTick>();
+        app.init_resource::<LastPhysicsSyncTick>();
 
         // Register all reflected physics types
-        app.register_type::<crate::components::RigidBody>()
-            .register_type::<crate::components::Collider>()
-            .register_type::<crate::components::LinearVelocity>()
-            .register_type::<crate::components::AngularVelocity>()
-            .register_type::<crate::components::LinearDamping>()
-            .register_type::<crate::components::AngularDamping>()
-            .register_type::<crate::components::ExternalForce>()
-            .register_type::<crate::components::ExternalTorque>()
-            .register_type::<crate::components::ExternalImpulse>()
-            .register_type::<crate::components::StaticMarker>()
-            .register_type::<crate::components::ContinuousCollision>()
-            .register_type::<crate::components::TransformDriven>()
-            .register_type::<crate::config::PhysicsConfig>()
-            .register_type::<crate::gravity::Gravity>();
+        app.register_type::<RigidBody>()
+            .register_type::<Collider>()
+            .register_type::<LinearVelocity>()
+            .register_type::<AngularVelocity>()
+            .register_type::<LinearDamping>()
+            .register_type::<AngularDamping>()
+            .register_type::<ExternalForce>()
+            .register_type::<ExternalTorque>()
+            .register_type::<ExternalImpulse>()
+            .register_type::<StaticMarker>()
+            .register_type::<ContinuousCollision>()
+            .register_type::<TransformDriven>()
+            .register_type::<PhysicsConfig>()
+            .register_type::<Gravity>();
 
         app.configure_sets(
             FixedUpdate,
             (
-                crate::systems::PhysicsSet::Spawn,
-                crate::systems::PhysicsSet::ApplyVelocities,
-                crate::systems::PhysicsSet::ApplyGravity,
-                crate::systems::PhysicsSet::ApplyForces,
-                crate::systems::PhysicsSet::Step,
-                crate::systems::PhysicsSet::SyncTransforms,
+                PhysicsSet::Spawn,
+                PhysicsSet::ApplyVelocities,
+                PhysicsSet::ApplyGravity,
+                PhysicsSet::ApplyForces,
+                PhysicsSet::Step,
+                PhysicsSet::SyncTransforms,
             )
                 .chain(),
         );
@@ -57,39 +66,38 @@ impl Plugin for BoltPlugin {
         app.add_systems(
             FixedUpdate,
             ApplyDeferred
-                .after(crate::systems::PhysicsSet::Spawn)
-                .before(crate::systems::PhysicsSet::ApplyVelocities),
+                .after(PhysicsSet::Spawn)
+                .before(PhysicsSet::ApplyVelocities),
         );
 
         app.add_systems(
             FixedUpdate,
             (
-                spawn_physics_bodies.in_set(crate::systems::PhysicsSet::Spawn),
-                apply_velocities.in_set(crate::systems::PhysicsSet::ApplyVelocities),
-                crate::systems::apply_user_transforms
-                    .in_set(crate::systems::PhysicsSet::ApplyVelocities)
+                spawn_physics_bodies.in_set(PhysicsSet::Spawn),
+                apply_velocities.in_set(PhysicsSet::ApplyVelocities),
+                apply_user_transforms
+                    .in_set(PhysicsSet::ApplyVelocities)
                     .after(apply_velocities),
-                crate::systems::move_transform_driven_kinematics
-                    .in_set(crate::systems::PhysicsSet::ApplyVelocities)
-                    .after(crate::systems::apply_user_transforms),
-                apply_gravity.in_set(crate::systems::PhysicsSet::ApplyGravity),
-                crate::systems::apply_external_forces
-                    .in_set(crate::systems::PhysicsSet::ApplyForces),
+                move_transform_driven_kinematics
+                    .in_set(PhysicsSet::ApplyVelocities)
+                    .after(apply_user_transforms),
+                apply_gravity.in_set(PhysicsSet::ApplyGravity),
+                apply_external_forces.in_set(PhysicsSet::ApplyForces),
                 // Ordered explicitly: the two systems share ResMut<PhysicsWorld>
                 // (commutative in effect — one accumulates, the other kicks —
                 // but Bevy would otherwise flag the pair as ambiguously
                 // ordered, invisibly under MinimalPlugins and fatally for
                 // apps that escalate ambiguity_detection to Error).
-                crate::systems::apply_external_impulses
-                    .in_set(crate::systems::PhysicsSet::ApplyForces)
-                    .after(crate::systems::apply_external_forces),
-                step_physics.in_set(crate::systems::PhysicsSet::Step),
-                sync_transforms.in_set(crate::systems::PhysicsSet::SyncTransforms),
+                apply_external_impulses
+                    .in_set(PhysicsSet::ApplyForces)
+                    .after(apply_external_forces),
+                step_physics.in_set(PhysicsSet::Step),
+                sync_transforms.in_set(PhysicsSet::SyncTransforms),
             ),
         );
 
-        app.add_observer(crate::systems::cleanup_despawned_physics_bodies);
-        app.add_observer(crate::systems::remove_jolt_body_on_rigidbody_removal);
-        app.add_observer(crate::systems::remove_jolt_body_on_collider_removal);
+        app.add_observer(cleanup_despawned_physics_bodies);
+        app.add_observer(remove_jolt_body_on_rigidbody_removal);
+        app.add_observer(remove_jolt_body_on_collider_removal);
     }
 }
