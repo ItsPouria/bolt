@@ -213,14 +213,16 @@ pub struct ExternalTorque(pub Vec3);
 /// The reset is change-detection-safe (it never looks like a user
 /// write), so a fresh kick is always a fresh component write — insert,
 /// mutate, or write the same value again after a tick. Leaving it at
-/// zero does nothing. An impulse written while its entity is bodyless
-/// or non-dynamic has its change consumed un-fired; when the body then
-/// comes into existence, that unfireable value is **discarded** (zeroed,
-/// with a warning) — impulses are consumed or discarded, never carried.
-/// A write made in the same frame as the spawn still fires. The vector
-/// is world-space and lands at the center of mass (a pure push, no
-/// spin). Only meaningful on dynamic bodies; a non-zero kick wakes a
-/// sleeping one. Applied through
+/// zero does nothing. An impulse whose change was consumed before its
+/// body existed — written while bodyless or non-dynamic, or bundled
+/// into an unordered `FixedUpdate` command-spawn whose flush lands
+/// after the apply system's window — is **discarded** when the body
+/// comes into existence (zeroed, with a warning): impulses are
+/// consumed or discarded, never carried. Writes made outside
+/// `FixedUpdate`, or from systems ordered before the `Spawn` stage,
+/// fire normally. The vector is world-space and lands at the center of
+/// mass (a pure push, no spin). Only meaningful on dynamic bodies; a
+/// non-zero kick wakes a sleeping one. Applied through
 /// [`PhysicsWorld::add_impulse`](crate::world::PhysicsWorld::add_impulse).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
 #[reflect(Component)]

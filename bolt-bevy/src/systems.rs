@@ -46,18 +46,15 @@ pub enum PhysicsSet {
 ///   components.
 /// - If a respawn fails, the previous body and components are kept (a warning
 ///   is logged) so the entity keeps simulating; fixing the component retries.
-///   A failed *fresh* spawn removes the physics components instead — the
-///   push family included.
-/// - An unfireable [`ExternalImpulse`]
-///   — non-zero, its change consumed before this body existed (written
-///   while bodyless or non-dynamic) — is discarded at the door: zeroed
-///   with a warning, never fired, never carried. A same-frame write
-///   still rides the ordinary `Changed` path and fires. Forces and
-///   torques survive the rebuild: presence is their re-issue.
+///   A failed *fresh* spawn removes the physics components and the dead
+///   `ExternalImpulse`; `ExternalForce`/`ExternalTorque` are live user data
+///   that auto-resumes when a body exists (presence is their re-issue) and
+///   are kept. Unfireable impulses generally are discarded by
+///   [`apply_external_impulses`] when the body comes into existence.
 #[allow(clippy::type_complexity)]
 pub fn spawn_physics_bodies(
     mut commands: Commands,
-    mut query: Query<
+    query: Query<
         (
             Entity,
             &RigidBody,
@@ -68,7 +65,6 @@ pub fn spawn_physics_bodies(
             Option<&LinearDamping>,
             Option<&AngularDamping>,
             Option<&ContinuousCollision>,
-            Option<&mut ExternalImpulse>,
         ),
         Or<(Changed<RigidBody>, Changed<Collider>)>,
     >,
@@ -85,8 +81,7 @@ pub fn spawn_physics_bodies(
         linear_damping,
         angular_damping,
         ccd,
-        external_impulse,
-    ) in query.iter_mut()
+    ) in query.iter()
     {
         // Capture the Jolt-side velocity before any teardown so a respawn
         // stays velocity-continuous even when the entity carries no
@@ -134,29 +129,6 @@ pub fn spawn_physics_bodies(
                 // must not survive (e.g. a kinematic switched to dynamic
                 // would keep a stale TransformDriven the move refuses anyway).
                 entity_cmds.remove::<TransformDriven>();
-                // Option B: impulses are consumed or discarded, never
-                // carried. The zombie is specifically a non-zero impulse
-                // whose Changed tick was already consumed while the entity
-                // was bodyless or non-dynamic — it can never fire now, and
-                // leaving it sitting is the dead-write window. Discard it
-                // at the door (bypass: the discard must not look like a
-                // user write). A FRESH write still fires normally: same-
-                // frame spawn setup (bundle inserts included) is Changed
-                // at the body's creation and rides the ordinary path.
-                // Forces and torques are immune by design — presence is
-                // their re-issue — and survive the rebuild untouched.
-                if let Some(mut impulse) = external_impulse
-                    && !impulse.is_changed()
-                    && **impulse != Vec3::ZERO
-                {
-                    warn!(
-                        "Discarded an unfireable ExternalImpulse at body creation for entity \
-                         {:?} — its change was consumed before the body existed; impulses are \
-                         consumed or discarded, never carried",
-                        entity
-                    );
-                    impulse.bypass_change_detection().0 = Vec3::ZERO;
-                }
                 if *rigidbody == RigidBody::Static {
                     entity_cmds.insert(StaticMarker);
                 } else {
@@ -175,7 +147,8 @@ pub fn spawn_physics_bodies(
             }
             None => {
                 warn!(
-                    "Failed to spawn physics body for entity {:?}; removing RigidBody and Collider",
+                    "Failed to spawn physics body for entity {:?}; removing RigidBody, \
+                     Collider, and ExternalImpulse (any ExternalForce/ExternalTorque is kept)",
                     entity
                 );
                 commands.entity(entity).remove::<(
@@ -184,8 +157,11 @@ pub fn spawn_physics_bodies(
                     JoltBody,
                     StaticMarker,
                     TransformDriven,
-                    ExternalForce,
-                    ExternalTorque,
+                    // The impulse is dead data without a body (its change
+                    // was consumed or will be discarded at the door when a
+                    // retry succeeds) — strip it. ExternalForce/Torque are
+                    // LIVE user data that auto-resumes the moment a body
+                    // exists (presence is the re-issue): they stay.
                     ExternalImpulse,
                 )>();
             }
@@ -723,15 +699,41 @@ pub fn apply_external_forces(
 /// turning the one-shot into a machine gun; the bypass keeps "a fresh
 /// kick is a fresh component write" true.
 ///
+/// Unfireable impulses are discarded here, at the door — this system
+/// is the consumer of changes, so it alone can judge "can this still
+/// fire?": the `Or` filter also admits bodies whose `JoltBody` is
+/// fresh (spawn or respawn), and a non-zero impulse that is *not*
+/// changed by this system's own view had its tick consumed before the
+/// body existed (written while bodyless or non-dynamic, or bundled
+/// into a `FixedUpdate` command-spawn whose flush lands after this
+/// system's window). Such a value can never fire; it is zeroed with a
+/// warning — impulses are consumed or discarded, never carried. A
+/// fresh write rides the ordinary path and fires, including same-frame
+/// world-level inserts and systems ordered before the `Spawn` stage.
+///
 /// Zero vectors and non-dynamic bodies are skipped without an FFI call
 /// (Jolt ignores impulses on statics and kinematics anyway, and a zero
 /// impulse would still wake a sleeping body for nothing).
+#[allow(clippy::type_complexity)]
 pub fn apply_external_impulses(
     mut physics_world: ResMut<PhysicsWorld>,
-    mut query: Query<(&JoltBody, &RigidBody, &mut ExternalImpulse), Changed<ExternalImpulse>>,
+    mut query: Query<
+        (&JoltBody, &RigidBody, &mut ExternalImpulse),
+        Or<(Changed<ExternalImpulse>, Changed<JoltBody>)>,
+    >,
 ) {
     for (body, rigidbody, mut impulse) in query.iter_mut() {
         if *rigidbody != RigidBody::Dynamic || **impulse == Vec3::ZERO {
+            continue;
+        }
+        if !impulse.is_changed() {
+            warn!(
+                "Discarded an unfireable ExternalImpulse for entity {:?} — its change was \
+                 consumed before the body existed; impulses are consumed or discarded, never \
+                 carried",
+                body
+            );
+            impulse.bypass_change_detection().0 = Vec3::ZERO;
             continue;
         }
         physics_world.add_impulse(body.0, **impulse);
@@ -1778,6 +1780,12 @@ mod tests {
         for _ in 0..3 {
             app.update();
         }
+        // Precondition: the kick is still sitting non-zero, unconsumed as
+        // data — otherwise the discard below would pass vacuously.
+        assert_ne!(
+            *app.world().get::<ExternalImpulse>(mule).unwrap(),
+            ExternalImpulse(Vec3::ZERO)
+        );
         app.world_mut().get_entity_mut(mule).unwrap().insert((
             RigidBody::Dynamic,
             Collider::Box {
@@ -1924,9 +1932,12 @@ mod tests {
 
         let world = app.world();
         assert!(world.get::<JoltBody>(entity).is_none());
-        assert!(world.get::<ExternalForce>(entity).is_none());
-        assert!(world.get::<ExternalTorque>(entity).is_none());
+        // The impulse is dead data — stripped with the bundle.
         assert!(world.get::<ExternalImpulse>(entity).is_none());
+        // Forces are LIVE user data that auto-resumes when a body exists
+        // (presence is their re-issue) — they must survive the failure.
+        assert!(world.get::<ExternalForce>(entity).is_some());
+        assert!(world.get::<ExternalTorque>(entity).is_some());
     }
 
     #[test]
@@ -2005,6 +2016,171 @@ mod tests {
         assert_eq!(
             seen, 1,
             "observer must see exactly the one user write, saw {seen}"
+        );
+        assert_eq!(
+            *app.world().get::<ExternalImpulse>(entity).unwrap(),
+            ExternalImpulse(Vec3::ZERO)
+        );
+    }
+
+    #[test]
+    fn test_fixedupdate_bundle_impulse_is_discarded_at_the_door() {
+        // The reviewer's BLOCKER scenario, now pinned: an unordered
+        // FixedUpdate system spawning a body WITH its kick is the idiomatic
+        // "projectile" pattern — and its command flush can land after the
+        // apply system's window, consuming the change before the body
+        // exists. The kick must be DISCARDED with a warning (never left as
+        // a zombie, per option B) — this exact scenario zombified silently
+        // under the first discard implementation.
+        fn spawn_projectile(mut commands: Commands, mut done: Local<bool>) {
+            if *done {
+                return;
+            }
+            *done = true;
+            commands.spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Dynamic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+                ExternalImpulse(Vec3::new(0.0, 1000.0, 0.0)),
+            ));
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TransformPlugin);
+        app.add_plugins(BoltPlugin::default());
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 64.0),
+            ));
+        app.world_mut()
+            .insert_resource(crate::gravity::Gravity(Vec3::ZERO));
+        app.add_systems(FixedUpdate, spawn_projectile); // unordered: default
+
+        for _ in 0..6 {
+            app.update();
+        }
+
+        let mut query = app
+            .world_mut()
+            .query::<(&LinearVelocity, &ExternalImpulse)>();
+        let (velocity, impulse) = query.single(app.world()).unwrap();
+        assert!(
+            velocity.y.abs() < 1e-6,
+            "the in-window kick must not fire: {}",
+            velocity.y
+        );
+        assert_eq!(
+            *impulse,
+            ExternalImpulse(Vec3::ZERO),
+            "the in-window kick must be discarded at the door, not zombified"
+        );
+    }
+
+    #[test]
+    fn test_pre_spawn_ordered_kick_fires() {
+        // The blessed placement, pinned: a writer ordered before the Spawn
+        // stage flushes its bundle early enough that the kick's change is
+        // alive when the body exists — it fires normally.
+        fn spawn_projectile(mut commands: Commands, mut done: Local<bool>) {
+            if *done {
+                return;
+            }
+            *done = true;
+            commands.spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                RigidBody::Dynamic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+                ExternalImpulse(Vec3::new(0.0, 1000.0, 0.0)),
+            ));
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TransformPlugin);
+        app.add_plugins(BoltPlugin::default());
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 64.0),
+            ));
+        app.world_mut()
+            .insert_resource(crate::gravity::Gravity(Vec3::ZERO));
+        app.add_systems(FixedUpdate, spawn_projectile.before(PhysicsSet::Spawn));
+
+        for _ in 0..6 {
+            app.update();
+        }
+
+        let mut query = app
+            .world_mut()
+            .query::<(&LinearVelocity, &ExternalImpulse)>();
+        let (velocity, impulse) = query.single(app.world()).unwrap();
+        assert!(
+            (velocity.y - 1.0).abs() < 0.2,
+            "a pre-Spawn-ordered kick must fire: {}",
+            velocity.y
+        );
+        assert_eq!(*impulse, ExternalImpulse(Vec3::ZERO));
+    }
+
+    #[test]
+    fn test_discard_is_invisible_to_changed_consumers() {
+        // SF2 from the review: the discard-at-the-door ALSO writes through
+        // the bypass, and nothing pinned that. An observer (placed before
+        // ApplyForces, the discriminating window) must see exactly the
+        // user's original write — never the discard's zeroing. A
+        // plain-write discard would surface as a second sighting.
+        #[derive(Resource, Default)]
+        struct ObservedWrites(usize);
+        fn observer(mut seen: ResMut<ObservedWrites>, query: Query<(), Changed<ExternalImpulse>>) {
+            seen.0 += query.iter().count();
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TransformPlugin);
+        app.add_plugins(BoltPlugin::default());
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 64.0),
+            ));
+        app.world_mut()
+            .insert_resource(crate::gravity::Gravity(Vec3::ZERO));
+        app.init_resource::<ObservedWrites>();
+        app.add_systems(FixedUpdate, observer.before(PhysicsSet::ApplyForces));
+
+        // The zombie: a kick written while bodyless, its change consumed.
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 10.0, 0.0),
+                ExternalImpulse(Vec3::new(0.0, 1000.0, 0.0)),
+            ))
+            .id();
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(app.world().get_resource::<ObservedWrites>().unwrap().0, 1);
+
+        // The body arrives; the discard fires this tick.
+        app.world_mut().get_entity_mut(entity).unwrap().insert((
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+        ));
+        for _ in 0..5 {
+            app.update();
+        }
+
+        assert_eq!(
+            app.world().get_resource::<ObservedWrites>().unwrap().0,
+            1,
+            "the discard must be invisible: exactly the user's one write"
         );
         assert_eq!(
             *app.world().get::<ExternalImpulse>(entity).unwrap(),
