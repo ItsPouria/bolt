@@ -1460,4 +1460,275 @@ mod tests {
 
         assert!(affine_of(&mut app, entity).is_none());
     }
+
+    // --- ApplyForces: the push family's ECS contracts ---
+
+    /// A minimal app with a manual 1/64 s clock, zero gravity, and a
+    /// dynamic 0.5 m half-extent box (a 1 m cube = 1 m³ = 1000 kg at
+    /// Jolt's default density) spawned at the given offset — the mule
+    /// the ApplyForces tests build their numbers on. Returns the app
+    /// and the box's entity.
+    fn forces_app(position: Vec3) -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TransformPlugin);
+        app.add_plugins(BoltPlugin::default());
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 64.0),
+            ));
+        app.world_mut()
+            .insert_resource(crate::gravity::Gravity(Vec3::ZERO));
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(position),
+                RigidBody::Dynamic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+            ))
+            .id();
+        (app, entity)
+    }
+
+    #[test]
+    fn test_unchanged_external_force_keeps_applying() {
+        // The Changed<ExternalForce> trap, pinned: the component is
+        // inserted once and NEVER touched again, so a change-gated
+        // system would fire for exactly one tick. 1000 N on 1000 kg is
+        // 1 m/s² — after ~1 s of fixed ticks the velocity must be near
+        // 1 m/s, not parked at one tick's worth (~0.016).
+        let (mut app, entity) = forces_app(Vec3::new(0.0, 10.0, 0.0));
+        app.world_mut()
+            .get_entity_mut(entity)
+            .unwrap()
+            .insert(ExternalForce(Vec3::new(0.0, 1000.0, 0.0)));
+
+        for _ in 0..3 {
+            app.update(); // warm-up: first update may run zero fixed ticks
+        }
+        let early = app.world().get::<LinearVelocity>(entity).unwrap().y;
+
+        for _ in 0..64 {
+            app.update(); // one simulated second, component untouched
+        }
+        let late = app.world().get::<LinearVelocity>(entity).unwrap().y;
+
+        assert!(
+            late > early + 0.5,
+            "an unchanged ExternalForce must keep applying every tick \
+             (the accumulator is cleared per step); got {early} then {late}"
+        );
+    }
+
+    #[test]
+    fn test_external_torque_spins_without_translating() {
+        // Continuous torque through the ECS: angular velocity grows
+        // while the center of mass stays put.
+        let (mut app, entity) = forces_app(Vec3::new(0.0, 10.0, 0.0));
+        app.world_mut()
+            .get_entity_mut(entity)
+            .unwrap()
+            .insert(ExternalTorque(Vec3::new(0.0, 500.0, 0.0)));
+
+        for _ in 0..3 {
+            app.update();
+        }
+        let early = app.world().get::<AngularVelocity>(entity).unwrap().y.abs();
+
+        for _ in 0..64 {
+            app.update();
+        }
+        let (late, linear) = {
+            let world = app.world();
+            let ang = world.get::<AngularVelocity>(entity).unwrap().y.abs();
+            let lin = world.get::<LinearVelocity>(entity).unwrap().length();
+            (ang, lin)
+        };
+
+        assert!(
+            late > early + 0.5,
+            "an unchanged ExternalTorque must keep spinning the body up; \
+             got {early} then {late}"
+        );
+        assert!(
+            linear < 1e-3,
+            "a pure torque must not translate the body, got {linear}"
+        );
+    }
+
+    #[test]
+    fn test_push_family_ignores_non_dynamic_bodies() {
+        // Static and kinematic bodies carry all three push components;
+        // Jolt's IsDynamic() gate (plus the ECS-side skip) must leave
+        // both exactly where they spawned.
+        // The helper's dynamic mule floats untouched here (zero gravity);
+        // the actual subjects spawn below.
+        let (mut app, _mule) = forces_app(Vec3::new(0.0, 10.0, 0.0));
+        let static_e = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(20.0, 0.0, 0.0),
+                RigidBody::Static,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+                ExternalForce(Vec3::new(0.0, 100_000.0, 0.0)),
+                ExternalTorque(Vec3::Y * 100_000.0),
+                ExternalImpulse(Vec3::new(0.0, 100_000.0, 0.0)),
+            ))
+            .id();
+        let kinematic_e = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(30.0, 0.0, 0.0),
+                RigidBody::Kinematic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+                ExternalForce(Vec3::new(0.0, 100_000.0, 0.0)),
+                ExternalTorque(Vec3::Y * 100_000.0),
+                ExternalImpulse(Vec3::new(0.0, 100_000.0, 0.0)),
+            ))
+            .id();
+
+        for _ in 0..16 {
+            app.update();
+        }
+
+        for (entity, expected) in [
+            (static_e, Vec3::new(20.0, 0.0, 0.0)),
+            (kinematic_e, Vec3::new(30.0, 0.0, 0.0)),
+        ] {
+            let transform = app.world().get::<Transform>(entity).unwrap();
+            assert!(
+                transform.translation.distance(expected) < 1e-3,
+                "non-dynamic body must ignore the push family, got {}",
+                transform.translation
+            );
+        }
+    }
+
+    #[test]
+    fn test_external_impulse_fires_once_and_resets() {
+        // 1000 N·s on the 1000 kg mule = 1 m/s. The kick lands once;
+        // the component reads ZERO afterwards and stays zero; the
+        // velocity does NOT keep growing on later ticks.
+        let (mut app, entity) = forces_app(Vec3::new(0.0, 10.0, 0.0));
+        app.world_mut()
+            .get_entity_mut(entity)
+            .unwrap()
+            .insert(ExternalImpulse(Vec3::new(0.0, 1000.0, 0.0)));
+
+        for _ in 0..3 {
+            app.update();
+        }
+        let kicked = app.world().get::<LinearVelocity>(entity).unwrap().y;
+        assert!(
+            (kicked - 1.0).abs() < 0.2,
+            "impulse must deliver Δv = J/m = 1 m/s, got {kicked}"
+        );
+        assert_eq!(
+            *app.world().get::<ExternalImpulse>(entity).unwrap(),
+            ExternalImpulse(Vec3::ZERO),
+            "impulse must be reset to zero after firing"
+        );
+
+        for _ in 0..8 {
+            app.update();
+        }
+        let settled = app.world().get::<LinearVelocity>(entity).unwrap().y;
+        assert!(
+            (settled - kicked).abs() < 0.2,
+            "the one-shot must not re-fire on later ticks: {kicked} then {settled}"
+        );
+        assert_eq!(
+            *app.world().get::<ExternalImpulse>(entity).unwrap(),
+            ExternalImpulse(Vec3::ZERO)
+        );
+    }
+
+    #[test]
+    fn test_impulse_rewrite_fires_again() {
+        // The other half of the one-shot contract: a fresh component
+        // write is a fresh kick. After the first kick (1 m/s) and the
+        // reset, writing the SAME value must fire again (2 m/s total).
+        let (mut app, entity) = forces_app(Vec3::new(0.0, 10.0, 0.0));
+        app.world_mut()
+            .get_entity_mut(entity)
+            .unwrap()
+            .insert(ExternalImpulse(Vec3::new(0.0, 1000.0, 0.0)));
+        for _ in 0..3 {
+            app.update();
+        }
+        let first = app.world().get::<LinearVelocity>(entity).unwrap().y;
+        assert!((first - 1.0).abs() < 0.2);
+
+        {
+            let mut impulse = app.world_mut().get_mut::<ExternalImpulse>(entity).unwrap();
+            impulse.0 = Vec3::new(0.0, 1000.0, 0.0); // same value, fresh write
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+        let second = app.world().get::<LinearVelocity>(entity).unwrap().y;
+        assert!(
+            (second - 2.0).abs() < 0.3,
+            "a rewritten impulse must fire again: 1 m/s + 1 m/s expected, got {second}"
+        );
+    }
+
+    #[test]
+    fn test_zero_external_force_lets_body_sleep() {
+        // The zero-skip pin: Jolt's AddForce wakes the body even for a
+        // zero force (activation fires unconditionally in the dynamic
+        // branch), so forwarding a calm wind's ZERO every tick would
+        // keep the body awake forever. The precondition assert is the
+        // point — only a genuinely sleeping body proves the guard.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TransformPlugin);
+        app.add_plugins(BoltPlugin::default()); // default gravity: it must land
+        app.world_mut()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 64.0),
+            ));
+        // Wide floor — a cube-sized floor under an off-center box is the
+        // "falls forever, never sleeps" trap the core wake test taught.
+        app.world_mut().spawn((
+            Transform::from_xyz(0.0, -1.0, 0.0),
+            RigidBody::Static,
+            Collider::Box {
+                half_extents: Vec3::new(50.0, 1.0, 50.0),
+            },
+        ));
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 0.5, 0.0), // resting on the floor
+                RigidBody::Dynamic,
+                Collider::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+                ExternalForce(Vec3::ZERO), // present, but calm
+            ))
+            .id();
+
+        for _ in 0..192 {
+            app.update(); // 3 simulated seconds: fall, settle, sleep
+        }
+        let (physics_world, jolt_body) = {
+            let world = app.world();
+            (
+                world.get_resource::<crate::world::PhysicsWorld>().unwrap(),
+                world.get::<JoltBody>(entity).unwrap().handle(),
+            )
+        };
+        assert!(
+            !physics_world.is_active(jolt_body),
+            "a zero ExternalForce must not keep its body awake — the system \
+             must skip zero vectors rather than wake Jolt for nothing"
+        );
+    }
 }
