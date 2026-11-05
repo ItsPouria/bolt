@@ -1515,11 +1515,10 @@ mod tests {
 
     #[test]
     fn test_unchanged_external_force_keeps_applying() {
-        // The Changed<ExternalForce> trap, pinned: the component is
-        // inserted once and NEVER touched again, so a change-gated
-        // system would fire for exactly one tick. 1000 N on 1000 kg is
-        // 1 m/s² — after ~1 s of fixed ticks the velocity must be near
-        // 1 m/s, not parked at one tick's worth (~0.016).
+        // The component is inserted once and NEVER touched again, so a
+        // change-gated system would fire for exactly one tick. 1000 N on
+        // 1000 kg is 1 m/s² — after ~1 s of fixed ticks the velocity must
+        // be near 1 m/s, not parked at one tick's worth (~0.016).
         let (mut app, entity) = forces_app(Vec3::new(0.0, 10.0, 0.0));
         app.world_mut()
             .get_entity_mut(entity)
@@ -1583,11 +1582,7 @@ mod tests {
     fn test_push_family_ignores_non_dynamic_bodies() {
         // Static and kinematic bodies carry all three push components;
         // Jolt's IsDynamic() gate (plus the ECS-side skip) must leave
-        // both exactly where they spawned. Note this pins the ENGINE
-        // gate: audit probes show removing the ECS-side skip alone stays
-        // green, because Jolt masks it — the skip is kept to avoid a
-        // futile FFI call per tick (the kinematic-drive precedent), not
-        // because this test can see it.
+        // both exactly where they spawned.
         // The helper's dynamic mule floats untouched here (zero gravity);
         // the actual subjects spawn below.
         let (mut app, _mule) = forces_app(Vec3::new(0.0, 10.0, 0.0));
@@ -1706,11 +1701,11 @@ mod tests {
 
     #[test]
     fn test_zero_external_force_lets_body_sleep() {
-        // The zero-skip pin: Jolt's AddForce wakes the body even for a
-        // zero force (activation fires unconditionally in the dynamic
-        // branch), so forwarding a calm wind's ZERO every tick would
-        // keep the body awake forever. The precondition assert is the
-        // point — only a genuinely sleeping body proves the guard.
+        // Jolt's AddForce wakes the body even for a zero force (activation
+        // fires unconditionally in the dynamic branch), so forwarding a
+        // calm wind's ZERO every tick would keep the body awake forever.
+        // The precondition assert is the point — only a genuinely
+        // sleeping body proves the guard.
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TransformPlugin);
@@ -1761,11 +1756,10 @@ mod tests {
 
     #[test]
     fn test_stale_impulse_is_discarded_when_body_spawns() {
-        // Option B's core pin: impulses are consumed or discarded, never
-        // carried. A kick written while the entity is bodyless has its
-        // Changed tick consumed; when the body finally spawns, the stale
-        // value must be DISCARDED (zeroed) — not left sitting unfireable
-        // (the old dead window), not fired (option A).
+        // Impulses are consumed or discarded, never carried. A kick
+        // written while the entity is bodyless has its Changed tick
+        // consumed; when the body finally spawns, the stale value must
+        // be discarded (zeroed) — not left sitting unfireable, not fired.
         let (mut app, mule) = forces_app(Vec3::new(0.0, 10.0, 0.0));
         // Remove the mule's physics identity, arm an impulse while it is
         // bodyless, then let the body come into existence.
@@ -1944,7 +1938,7 @@ mod tests {
     fn test_external_force_survives_respawn() {
         // Presence is the re-issue — and re-issue means across body
         // rebuilds too: a collider-change respawn must not interrupt a
-        // continuous push. Nothing pinned this before (audit gap 3).
+        // continuous push.
         let (mut app, entity) = forces_app(Vec3::new(0.0, 10.0, 0.0));
         app.world_mut()
             .get_entity_mut(entity)
@@ -1997,7 +1991,7 @@ mod tests {
         // after the observer's run but before its next one) becomes
         // visible on the following update. An observer placed after
         // ApplyForces would collapse user write and phantom into one
-        // change-window and pass vacuously — caught by mutation probe.
+        // change-window and pass vacuously.
         app.add_systems(FixedUpdate, observer.before(PhysicsSet::ApplyForces));
         for _ in 0..3 {
             app.update(); // warm-up; no writes yet
@@ -2025,13 +2019,11 @@ mod tests {
 
     #[test]
     fn test_fixedupdate_bundle_impulse_is_discarded_at_the_door() {
-        // The reviewer's BLOCKER scenario, now pinned: an unordered
-        // FixedUpdate system spawning a body WITH its kick is the idiomatic
-        // "projectile" pattern — and its command flush can land after the
-        // apply system's window, consuming the change before the body
-        // exists. The kick must be DISCARDED with a warning (never left as
-        // a zombie, per option B) — this exact scenario zombified silently
-        // under the first discard implementation.
+        // An unordered FixedUpdate system spawning a body WITH its kick is
+        // the idiomatic "projectile" pattern — and its command flush can
+        // land after the apply system's window, consuming the change
+        // before the body exists. The kick must be discarded with a
+        // warning, never left sitting unfireable.
         fn spawn_projectile(mut commands: Commands, mut done: Local<bool>) {
             if *done {
                 return;
@@ -2081,9 +2073,9 @@ mod tests {
 
     #[test]
     fn test_pre_spawn_ordered_kick_fires() {
-        // The blessed placement, pinned: a writer ordered before the Spawn
-        // stage flushes its bundle early enough that the kick's change is
-        // alive when the body exists — it fires normally.
+        // A writer ordered before the Spawn stage flushes its bundle
+        // early enough that the kick's change is alive when the body
+        // exists — it fires normally.
         fn spawn_projectile(mut commands: Commands, mut done: Local<bool>) {
             if *done {
                 return;
@@ -2129,11 +2121,11 @@ mod tests {
 
     #[test]
     fn test_discard_is_invisible_to_changed_consumers() {
-        // SF2 from the review: the discard-at-the-door ALSO writes through
-        // the bypass, and nothing pinned that. An observer (placed before
-        // ApplyForces, the discriminating window) must see exactly the
-        // user's original write — never the discard's zeroing. A
-        // plain-write discard would surface as a second sighting.
+        // The discard-at-the-door also writes through the bypass. An
+        // observer (placed before ApplyForces, the discriminating window)
+        // must see exactly the user's original write — never the
+        // discard's zeroing; a plain write would surface as a second
+        // sighting.
         #[derive(Resource, Default)]
         struct ObservedWrites(usize);
         fn observer(mut seen: ResMut<ObservedWrites>, query: Query<(), Changed<ExternalImpulse>>) {
