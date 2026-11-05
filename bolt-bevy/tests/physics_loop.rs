@@ -38,6 +38,70 @@ fn test_gravity_pulls_dynamic_bodies() {
     );
 }
 
+#[test]
+fn test_impulse_wakes_resting_box_and_it_leaves_the_ground() {
+    // The issue's headline acceptance test: a box resting on a floor —
+    // settled long enough to be genuinely asleep (Jolt sleeps still
+    // bodies after 0.5 s) — receives an upward ExternalImpulse and must
+    // leave the ground: the kick both wakes it and moves it. The sleep
+    // precondition is the point; without it, nothing here proves
+    // wake-up. A 1 m³ crate masses 1000 kg at Jolt's default density, so
+    // the kick is sized to mass: 5000 N·s = 5 m/s, well past gravity.
+    let mut app = physics_test_app();
+
+    let floor_size = Vec3::new(10.0, 0.1, 10.0);
+    app.world_mut().spawn((
+        Transform::from_xyz(0.0, -0.05, 0.0), // top face at y = 0
+        RigidBody::Static,
+        Collider::Box {
+            half_extents: floor_size / 2.0,
+        },
+    ));
+    let entity = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 0.5, 0.0), // resting on the floor
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+        ))
+        .id();
+
+    app.update();
+    advance_time_safely(&mut app, Duration::from_secs(1)); // settle into sleep
+
+    // Precondition: the box is verifiably asleep.
+    {
+        let world = app.world();
+        let physics = world.get_resource::<PhysicsWorld>().unwrap();
+        let body = world.get::<JoltBody>(entity).unwrap();
+        assert!(
+            !physics.is_active(body.handle()),
+            "precondition: the box must be asleep before the kick"
+        );
+    }
+
+    // The kick, written outside FixedUpdate (a fresh write is a fresh
+    // kick — it fires the next tick).
+    app.world_mut()
+        .get_entity_mut(entity)
+        .unwrap()
+        .insert(ExternalImpulse(Vec3::new(0.0, 5000.0, 0.0)));
+
+    app.update();
+    // One-shot contract: fired once, reset to zero after the tick.
+    assert_eq!(
+        *app.world().get::<ExternalImpulse>(entity).unwrap(),
+        ExternalImpulse(Vec3::ZERO),
+        "the impulse must reset to zero after firing"
+    );
+
+    advance_time_safely(&mut app, Duration::from_millis(200));
+    let y = app.world().get::<Transform>(entity).unwrap().translation.y;
+    assert!(y > 1.0, "the kicked box must leave the ground, y = {y}");
+}
+
 /// Advances the simulation time safely by the given duration.
 ///
 /// **Why use a loop instead of one big time jump?**
