@@ -707,9 +707,11 @@ pub fn apply_external_forces(
 /// body existed (written while bodyless or non-dynamic, or bundled
 /// into a `FixedUpdate` command-spawn whose flush lands after this
 /// system's window). Such a value can never fire; it is zeroed with a
-/// warning — impulses are consumed or discarded, never carried. A
-/// fresh write rides the ordinary path and fires, including same-frame
-/// world-level inserts and systems ordered before the `Spawn` stage.
+/// warning — impulses are consumed or discarded, never carried — when
+/// the body is (or becomes) dynamic; a non-dynamic holder skips it,
+/// and the discard lands at the dynamic flip. A fresh write rides the
+/// ordinary path and fires, including same-frame world-level inserts
+/// and systems ordered before the `Spawn` stage.
 ///
 /// Zero vectors and non-dynamic bodies are skipped without an FFI call
 /// (Jolt ignores impulses on statics and kinematics anyway, and a zero
@@ -1737,7 +1739,7 @@ mod tests {
 
         for _ in 0..192 {
             // 3 simulated seconds to settle into sleep (the box spawns
-            // already resting — nothing falls; audit N3).
+            // already resting — nothing falls).
             app.update();
         }
         let (physics_world, jolt_body) = {
@@ -1804,10 +1806,11 @@ mod tests {
 
     #[test]
     fn test_consumed_impulse_is_discarded_on_dynamic_flip() {
-        // The audit's trigger path 2: an impulse written while the body is
-        // kinematic is skipped but its Changed tick is consumed; flipping
-        // to Dynamic rebuilds the body, and the now-unfireable value must
-        // be discarded at the door — never carried, never fired.
+        // Impulses are consumed or discarded, never carried. A kick
+        // written while the body is kinematic is skipped but its Changed
+        // tick is consumed; flipping to Dynamic rebuilds the body, and
+        // the now-unfireable value must be discarded — never carried,
+        // never fired.
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TransformPlugin);
@@ -2049,7 +2052,17 @@ mod tests {
             ));
         app.world_mut()
             .insert_resource(crate::gravity::Gravity(Vec3::ZERO));
-        app.add_systems(FixedUpdate, spawn_projectile); // unordered: default
+        app.add_systems(
+            FixedUpdate,
+            // Explicit window edges make the dead-window flush
+            // deterministic rather than executor-timing luck: the spawner
+            // runs after Spawn's tick and before ApplyForces', so its
+            // command batch lands squarely in the window where the kick's
+            // change is consumed while the body cannot yet be seen.
+            spawn_projectile
+                .after(PhysicsSet::Spawn)
+                .before(PhysicsSet::ApplyForces),
+        );
 
         for _ in 0..6 {
             app.update();
@@ -2189,8 +2202,8 @@ mod tests {
         // Error cannot build at all. Settings must be installed BEFORE
         // the first schedule build, and real updates must follow --
         // settings on an already-built schedule never re-check, and
-        // FixedUpdate initializes lazily (both audit rounds hit that
-        // vacuous-pass trap independently).
+        // FixedUpdate initializes lazily — each is a vacuous-pass trap
+        // in its own right.
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TransformPlugin);

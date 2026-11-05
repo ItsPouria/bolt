@@ -34,7 +34,9 @@ All notable changes to this project will be documented in this file.
   consumed before its body existed (written while bodyless or
   non-dynamic, or bundled into an unordered FixedUpdate command-spawn
   whose flush lands after the apply system's window) is discarded with
-  a warning when the body comes into existence — impulses are consumed
+  a warning when the body comes into existence as a dynamic body (a
+  non-dynamic holder skips it; the discard lands at the dynamic flip)
+  — impulses are consumed
   or discarded, never carried; writes outside FixedUpdate or ordered
   before the Spawn stage fire normally. Failed fresh spawns strip the
   dead impulse but keep `ExternalForce`/`ExternalTorque` (live user

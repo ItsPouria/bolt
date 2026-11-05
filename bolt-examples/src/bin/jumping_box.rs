@@ -10,7 +10,7 @@ use bolt_examples::ExampleStatsPlugin;
 
 /// The kick, in newton-seconds. The crate is a 1 m cube = 1 m³ = 1000 kg
 /// at Jolt's default density (1000 kg/m³), so 4000 N·s launches it at
-/// 4 m/s — roughly a meter of hang time per press.
+/// 4 m/s — roughly 0.8 m of jump height per press (v²/2g).
 const JUMP_IMPULSE: f32 = 4000.0;
 
 fn main() {

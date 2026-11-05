@@ -217,12 +217,14 @@ pub struct ExternalTorque(pub Vec3);
 /// body existed — written while bodyless or non-dynamic, or bundled
 /// into an unordered `FixedUpdate` command-spawn whose flush lands
 /// after the apply system's window — is **discarded** when the body
-/// comes into existence (zeroed, with a warning): impulses are
-/// consumed or discarded, never carried. Writes made outside
-/// `FixedUpdate`, or from systems ordered before the `Spawn` stage,
-/// fire normally. The vector is world-space and lands at the center of
-/// mass (a pure push, no spin). Only meaningful on dynamic bodies; a
-/// non-zero kick wakes a sleeping one. Applied through
+/// comes into existence as a dynamic body (zeroed, with a warning);
+/// a non-dynamic holder skips it, and the discard lands at the
+/// dynamic flip: impulses are consumed or discarded, never carried.
+/// Writes made outside `FixedUpdate`, or from systems ordered before
+/// the `Spawn` stage, fire normally. The vector is world-space and
+/// lands at the center of mass (a pure push, no spin). Only
+/// meaningful on dynamic bodies; a non-zero kick wakes a sleeping
+/// one. Applied through
 /// [`PhysicsWorld::add_impulse`](crate::world::PhysicsWorld::add_impulse).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Deref, DerefMut, Reflect)]
 #[reflect(Component)]

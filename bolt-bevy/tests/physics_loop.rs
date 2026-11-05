@@ -97,6 +97,9 @@ fn test_impulse_wakes_resting_box_and_it_leaves_the_ground() {
         "the impulse must reset to zero after firing"
     );
 
+    // The reset assert above ran under the stale 100 ms manual duration
+    // from the settle loop, so the total simulated time between kick and
+    // this height assert is roughly 280 ms, not the nominal 200.
     advance_time_safely(&mut app, Duration::from_millis(200));
     let y = app.world().get::<Transform>(entity).unwrap().translation.y;
     assert!(y > 1.0, "the kicked box must leave the ground, y = {y}");
