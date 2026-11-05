@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- The push family (#1): bodies are pushable by gameplay code across all
+  three layers. bolt-core gains `add_force`/`add_torque`/`add_impulse`
+  over Jolt's body interface, with semantics verified against the
+  vendored Jolt source at the pinned rev: forces and torques land in a
+  per-body accumulator that PhysicsSystem clears after every step (one-
+  step-lived — re-issue every fixed tick to sustain a push), impulses
+  skip the accumulator and change velocity the moment they are applied
+  (`Δv = J / mass`, center of mass, no spin), all three wake sleeping
+  bodies (the impulse via an explicit `ActivateBodies`, force and torque
+  via the activation default JoltC's shim bakes in), and Jolt itself
+  silently ignores non-dynamics (`IsDynamic()` gate — no motion-type
+  guard needed, unlike `move_kinematic`'s null-deref trap). bolt-bevy's
+  wrapper delegates all three; `ExternalForce`/`ExternalTorque` are
+  continuous ECS components (presence is the re-issue: Jolt's per-step
+  clear is why the applying system iterates unconditionally instead of
+  gating on `Changed` — a change-gated force fires exactly one tick and
+  silently stops), and `ExternalImpulse` is one-shot (applied on change,
+  then reset to `Vec3::ZERO` through `bypass_change_detection` so the
+  reset never looks like a user write). The applying systems live in a
+  new `ApplyForces` set between `ApplyGravity` and `Step`, ordered
+  explicitly (shared `ResMut<PhysicsWorld>`; the pair is commutative in
+  effect but an unordered pair is invisible ambiguity under
+  MinimalPlugins and a build failure for apps escalating ambiguity
+  detection), zero vectors are skipped rather than sent (Jolt wakes the
+  body even for a zero force — a calm wind's `Vec3::ZERO` would
+  otherwise pin holders awake forever), and an impulse whose change was
+  consumed before its body existed (written while bodyless or
+  non-dynamic, or bundled into an unordered FixedUpdate command-spawn
+  whose flush lands after the apply system's window) is discarded with
+  a warning when the body comes into existence — impulses are consumed
+  or discarded, never carried; writes outside FixedUpdate or ordered
+  before the Spawn stage fire normally. Failed fresh spawns strip the
+  dead impulse but keep `ExternalForce`/`ExternalTorque` (live user
+  data that auto-resumes when a body exists). Fixes a doc bug found on
+  the way: `AngularVelocity` claimed "local X, Y, Z axes" — Jolt's
+  angular quantities are world-space (`Body.h`). Also adds the
+  `jumping_box` example (space jumps the crate; `just_pressed`, one
+  press one kick) and the issue's acceptance test: a box verifiably
+  asleep on a floor receives an upward `ExternalImpulse`, resets to
+  zero after one tick, and leaves the ground. Suite: 137 workspace
+  tests green (bolt-bevy 70: 36 lib + 32 `physics_loop` + 2
+  `despawn_quiet`).
 - Spawn-time damping control (#8): bolt-bevy gains `LinearDamping`/
   `AngularDamping` components and bolt-core's `BodySpawn` gains
   `linear_damping`/`angular_damping` fields (units 1/s; decay law
