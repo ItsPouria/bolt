@@ -1090,6 +1090,113 @@ fn test_child_of_moving_parent_holds_world_position() {
     );
 }
 
+/// Test-only marker: a child whose local Transform is re-authored by a
+/// user "script" every fixed tick (#11's scripted-edit trigger shape).
+#[derive(Component)]
+struct NudgedChild;
+
+/// The last local x the script wrote, so the assertion compares against
+/// the exact nudged value rather than the local `sync_transforms`
+/// re-expresses after the tick's step.
+#[derive(Resource, Default)]
+struct NudgedLocalX(f32);
+
+/// Re-authors the child's local Transform before Bolt's pipeline every
+/// fixed tick; the value is distinct each tick so `Changed<Transform>`
+/// fires every time.
+fn nudge_child_local(
+    mut tick: Local<u32>,
+    mut nudged: ResMut<NudgedLocalX>,
+    mut children: Query<&mut Transform, With<NudgedChild>>,
+) {
+    *tick += 1;
+    nudged.0 = 2.0 + *tick as f32 * 1e-3;
+    for mut transform in &mut children {
+        transform.translation.x = nudged.0;
+    }
+}
+
+#[test]
+fn test_child_user_edit_lands_on_fresh_parent_frame() {
+    let mut app = physics_test_app();
+
+    app.world_mut().insert_resource(Gravity(Vec3::ZERO));
+    app.init_resource::<NudgedLocalX>();
+
+    // Parent: a dynamic box drifting at 1 m/s in +x (same shape as the
+    // holds-world-position test — zero gravity, nothing else moves it).
+    let parent = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(0.0, 10.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.5),
+            },
+            LinearVelocity(Vec3::new(1.0, 0.0, 0.0)),
+        ))
+        .id();
+
+    // Child: a dynamic box parented under it, offset 2 m in local x so
+    // the colliders never overlap (overlapping dynamic boxes would be
+    // pushed apart by the contact solver, poisoning the measurement).
+    let child = app
+        .world_mut()
+        .spawn((
+            Transform::from_xyz(2.0, 0.0, 0.0),
+            ChildOf(parent),
+            RigidBody::Dynamic,
+            Collider::Box {
+                half_extents: Vec3::splat(0.25),
+            },
+            NudgedChild,
+        ))
+        .id();
+
+    // Warm-up: absorb the manual clock's zero-tick first update and let
+    // the spawn settle, so every later Transform write is a user edit,
+    // not spawn placement.
+    advance_time_safely(&mut app, Duration::from_millis(200));
+    app.add_systems(
+        FixedUpdate,
+        nudge_child_local.before(bolt_bevy::systems::PhysicsSet::Spawn),
+    );
+    advance_time_safely(&mut app, Duration::from_secs(1));
+
+    // Preconditions: the parent must still be moving, or a stale frame
+    // is indistinguishable from a fresh one.
+    let parent_handle = app.world().get::<JoltBody>(parent).unwrap().handle();
+    let child_handle = app.world().get::<JoltBody>(child).unwrap().handle();
+    let physics_world = app.world().resource::<PhysicsWorld>();
+    let parent_velocity = physics_world
+        .get_linear_velocity(parent_handle)
+        .expect("parent body must be live");
+    assert!(
+        parent_velocity.x > 0.5,
+        "precondition failed: parent barely moving (vx = {})",
+        parent_velocity.x
+    );
+
+    // The teleport composes the parent's pose as of apply time — before
+    // this tick's step — so back the parent's final step displacement
+    // out of its post-step pose to reconstruct the expectation.
+    let dt = app.world().resource::<Time<Fixed>>().delta_secs();
+    let (parent_pos, _) = physics_world.get_transform(parent_handle).unwrap();
+    let (child_pos, _) = physics_world.get_transform(child_handle).unwrap();
+    let nudged_x = app.world().resource::<NudgedLocalX>().0;
+    let expected = parent_pos - parent_velocity * dt + Vec3::new(nudged_x, 0.0, 0.0);
+
+    // One parent-step of error (~15 mm at 1 m/s, 64 Hz) is the one-tick-
+    // stale frame signature; a fresh composition is exact to float noise.
+    let error = child_pos.distance(expected);
+    assert!(
+        error < 1e-3,
+        "child Jolt pose {child_pos} vs fresh-frame expectation {expected}: \
+         off by {error} m — one parent-step of motion is the stale-frame \
+         signature"
+    );
+}
+
 /// Test-only marker: a plain (non-physics) entity moved by user "script"
 /// each frame, to exercise sync's plain-hierarchy ancestor walk.
 #[derive(Component)]
